@@ -1,36 +1,54 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
+#include "NativeFeatureIncludes.h"
+#if _RAKNET_SUPPORT_TelnetTransport==1 && _RAKNET_SUPPORT_TCPInterface==1
+
 #include "TelnetTransport.h"
 #include "TCPInterface.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include "LinuxStrings.h"
 
 // #define _PRINTF_DEBUG
 
 #define ECHO_INPUT
 
-#if (defined(__GNUC__)  || defined(__GCCXML__))
-#define _vsnprintf vsnprintf
-#endif
-
 #ifdef _MSC_VER
 #pragma warning( push )
 #endif
 
+using namespace RakNet;
+
+STATIC_FACTORY_DEFINITIONS(TelnetTransport,TelnetTransport);
+
 TelnetTransport::TelnetTransport()
 {
 	tcpInterface=0;
+	sendSuffix=0;
+	sendPrefix=0;
 }
 TelnetTransport::~TelnetTransport()
 {
 	Stop();
+	if (sendSuffix)
+		rakFree_Ex(sendSuffix, _FILE_AND_LINE_ );
+	if (sendPrefix)
+		rakFree_Ex(sendPrefix, _FILE_AND_LINE_ );
 }
-#ifdef _MSC_VER
-#pragma warning( disable : 4100 ) // warning C4100: <variable name> : unreferenced formal parameter
-#endif
 bool TelnetTransport::Start(unsigned short port, bool serverMode)
 {
+	(void) serverMode;
     AutoAllocate();
-	assert(serverMode);
+	RakAssert(serverMode);
 	return tcpInterface->Start(port, 64);
 }
 void TelnetTransport::Stop(void)
@@ -39,25 +57,48 @@ void TelnetTransport::Stop(void)
 	tcpInterface->Stop();
 	unsigned i;
 	for (i=0; i < remoteClients.Size(); i++)
-		delete remoteClients[i];
-	remoteClients.Clear();
+		RakNet::OP_DELETE(remoteClients[i], _FILE_AND_LINE_);
+	remoteClients.Clear(false, _FILE_AND_LINE_);
+	RakNet::OP_DELETE(tcpInterface, _FILE_AND_LINE_);
+	tcpInterface=0;
 }
-void TelnetTransport::Send(  PlayerID playerId, const char *data,... )
+void TelnetTransport::Send(  SystemAddress systemAddress, const char *data,... )
 {
 	if (tcpInterface==0) return;
 
+	if (data==0 || data[0]==0)
+		return;
+
 	char text[REMOTE_MAX_TEXT_INPUT];
+	size_t prefixLength;
+	if (sendPrefix)
+	{
+		strcpy(text, sendPrefix);
+		prefixLength = strlen(sendPrefix);
+	}
+	else
+	{
+		text[0]=0;
+		prefixLength=0;
+	}
 	va_list ap;
 	va_start(ap, data);
-	_vsnprintf(text, REMOTE_MAX_TEXT_INPUT, data, ap);
+	_vsnprintf(text+prefixLength, REMOTE_MAX_TEXT_INPUT-prefixLength, data, ap);
 	va_end(ap);
 	text[REMOTE_MAX_TEXT_INPUT-1]=0;
 
-	tcpInterface->Send(text, (unsigned int) strlen(text), playerId);
+	if (sendSuffix)
+	{
+		size_t length = strlen(text);
+		size_t availableChars = REMOTE_MAX_TEXT_INPUT-length-1;
+		strncat(text, sendSuffix, availableChars);
+	}
+
+	tcpInterface->Send(text, (unsigned int) strlen(text), systemAddress, false);
 }
-void TelnetTransport::CloseConnection( PlayerID playerId )
+void TelnetTransport::CloseConnection( SystemAddress systemAddress )
 {
-	tcpInterface->CloseConnection(playerId);
+	tcpInterface->CloseConnection(systemAddress);
 }
 Packet* TelnetTransport::Receive( void )
 {
@@ -72,13 +113,46 @@ Packet* TelnetTransport::Receive( void )
 		unsigned i;
 		for (i=0; i < p->length; i++)
 		{
-			printf("%i ", p->data[i]);
+			RAKNET_DEBUG_PRINTF("%i ", p->data[i]);
 		}
-		printf("\n");
+		RAKNET_DEBUG_PRINTF("\n");
 		tcpInterface->DeallocatePacket(p);
 		return 0;
 	}
 	*/
+
+	// Get this guy's cursor buffer.  This is real bullcrap that I have to do this.
+	unsigned i;
+	TelnetClient *remoteClient=0;
+	for (i=0; i < remoteClients.Size(); i++)
+	{
+		if (remoteClients[i]->systemAddress==p->systemAddress)
+			remoteClient=remoteClients[i];
+	}
+	//RakAssert(remoteClient);
+	if (remoteClient==0)
+	{
+		tcpInterface->DeallocatePacket(p);
+		return 0;
+	}
+
+
+	if (p->length==3 && p->data[0]==27 && p->data[1]==91 && p->data[2]==65)
+	{
+		if (remoteClient->lastSentTextInput[0])
+		{
+			// Up arrow, return last string
+			for (int i=0; remoteClient->textInput[i]; i++)
+				remoteClient->textInput[i]=8;
+			strcat(remoteClient->textInput, remoteClient->lastSentTextInput);
+			tcpInterface->Send((const char *)remoteClient->textInput, (unsigned int) strlen(remoteClient->textInput), p->systemAddress, false);
+			strcpy(remoteClient->textInput,remoteClient->lastSentTextInput);
+			remoteClient->cursorPosition=(unsigned int) strlen(remoteClient->textInput);
+		}
+		
+		return 0;
+	}
+
 
 	// 127 is delete - ignore that
 	// 9 is tab
@@ -100,25 +174,11 @@ Packet* TelnetTransport::Receive( void )
 		return 0;
 	}
 
-	// Get this guy's cursor buffer.  This is real bullcrap that I have to do this.
-	unsigned i;
-	TelnetClient *remoteClient=0;
-	for (i=0; i < remoteClients.Size(); i++)
-	{
-		if (remoteClients[i]->playerId==p->playerId)
-			remoteClient=remoteClients[i];
-	}
-	assert(remoteClient);
-	if (remoteClient==0)
-	{
-		tcpInterface->DeallocatePacket(p);
-		return 0;
-	}
 
 
 	// Echo
 #ifdef ECHO_INPUT
-	tcpInterface->Send((const char *)p->data, p->length, p->playerId);
+	tcpInterface->Send((const char *)p->data, p->length, p->systemAddress, false);
 #endif
 
 	bool gotLine;
@@ -132,23 +192,25 @@ Packet* TelnetTransport::Receive( void )
 			char spaceThenBack[2];
 			spaceThenBack[0]=' ';
 			spaceThenBack[1]=8;
-			tcpInterface->Send((const char *)spaceThenBack, 2, p->playerId);
+			tcpInterface->Send((const char *)spaceThenBack, 2, p->systemAddress, false);
 		}
 #endif
 
 		gotLine=ReassembleLine(remoteClient, p->data[i]);
 		if (gotLine && remoteClient->textInput[0])
 		{
-			Packet *reassembledLine = new Packet;
+
+			Packet *reassembledLine = (Packet*) rakMalloc_Ex(sizeof(Packet), _FILE_AND_LINE_);
 			reassembledLine->length=(unsigned int) strlen(remoteClient->textInput);
-			assert(reassembledLine->length < REMOTE_MAX_TEXT_INPUT);
-			reassembledLine->data= new unsigned char [reassembledLine->length+1];
+			memcpy(remoteClient->lastSentTextInput, remoteClient->textInput, reassembledLine->length+1);
+			RakAssert(reassembledLine->length < REMOTE_MAX_TEXT_INPUT);
+			reassembledLine->data= (unsigned char*) rakMalloc_Ex( reassembledLine->length+1, _FILE_AND_LINE_ );
 			memcpy(reassembledLine->data, remoteClient->textInput, reassembledLine->length);
 #ifdef _PRINTF_DEBUG
 			memset(remoteClient->textInput, 0, REMOTE_MAX_TEXT_INPUT);
 #endif
 			reassembledLine->data[reassembledLine->length]=0;
-			reassembledLine->playerId=p->playerId;
+			reassembledLine->systemAddress=p->systemAddress;
 			tcpInterface->DeallocatePacket(p);
 			return reassembledLine;
 		}
@@ -160,17 +222,17 @@ Packet* TelnetTransport::Receive( void )
 void TelnetTransport::DeallocatePacket( Packet *packet )
 {
 	if (tcpInterface==0) return;
-	delete [] packet->data;
-	delete packet;
+	rakFree_Ex(packet->data, _FILE_AND_LINE_ );
+	rakFree_Ex(packet, _FILE_AND_LINE_ );
 }
-PlayerID TelnetTransport::HasNewConnection(void)
+SystemAddress TelnetTransport::HasNewIncomingConnection(void)
 {
 	unsigned i;
-	PlayerID newConnection;
-	newConnection = tcpInterface->HasNewConnection();
+	SystemAddress newConnection;
+	newConnection = tcpInterface->HasNewIncomingConnection();
 	// 03/16/06 Can't force the stupid windows telnet to use line mode or local echo so now I have to track all the remote players and their
 	// input buffer
-	if (newConnection != UNASSIGNED_PLAYER_ID)
+	if (newConnection != UNASSIGNED_SYSTEM_ADDRESS)
 	{
 		unsigned char command[10];
 		// http://www.pcmicro.com/netfoss/RFC857.html
@@ -179,7 +241,7 @@ PlayerID TelnetTransport::HasNewConnection(void)
 		//command[1]=253; // WON'T
 		command[1]=251; // WILL
 		command[2]=1; // ECHO
-		tcpInterface->Send((const char*)command, 3, newConnection);
+		tcpInterface->Send((const char*)command, 3, newConnection, false);
 
 		/*
 		// Tell the other side to use line mode
@@ -195,7 +257,7 @@ PlayerID TelnetTransport::HasNewConnection(void)
 		TelnetClient *remoteClient=0;
 		for (i=0; i < remoteClients.Size(); i++)
 		{
-			if (remoteClients[i]->playerId==newConnection)
+			if (remoteClients[i]->systemAddress==newConnection)
 			{
 				remoteClient=remoteClients[i];
 				remoteClient->cursorPosition=0;
@@ -205,39 +267,66 @@ PlayerID TelnetTransport::HasNewConnection(void)
 		if (remoteClient==0)
 		{
 			remoteClient=new TelnetClient;
+			remoteClient->lastSentTextInput[0]=0;
 			remoteClient->cursorPosition=0;
-			remoteClient->playerId=newConnection;
+			remoteClient->systemAddress=newConnection;
 #ifdef _PRINTF_DEBUG
 			memset(remoteClient->textInput, 0, REMOTE_MAX_TEXT_INPUT);
 #endif
 		}
 
-		remoteClients.Insert(remoteClient);
+		remoteClients.Insert(remoteClient, _FILE_AND_LINE_);
 	}
 	return newConnection;
 }
-PlayerID TelnetTransport::HasLostConnection(void)
+SystemAddress TelnetTransport::HasLostConnection(void)
 {
-	PlayerID playerId;
+	SystemAddress systemAddress;
 	unsigned i;
-	playerId=tcpInterface->HasLostConnection();
-	if (playerId!=UNASSIGNED_PLAYER_ID)
+	systemAddress=tcpInterface->HasLostConnection();
+	if (systemAddress!=UNASSIGNED_SYSTEM_ADDRESS)
 	{
 		for (i=0; i < remoteClients.Size(); i++)
 		{
-			if (remoteClients[i]->playerId==playerId)
+			if (remoteClients[i]->systemAddress==systemAddress)
 			{
-				delete remoteClients[i];
+				RakNet::OP_DELETE(remoteClients[i], _FILE_AND_LINE_);
 				remoteClients[i]=remoteClients[remoteClients.Size()-1];
-				remoteClients.Del();
+				remoteClients.RemoveFromEnd();
 			}
 		}
 	}
-	return playerId;
+	return systemAddress;
 }
 CommandParserInterface* TelnetTransport::GetCommandParser(void)
 {
 	return 0;
+}
+void TelnetTransport::SetSendSuffix(const char *suffix)
+{
+	if (sendSuffix)
+	{
+		rakFree_Ex(sendSuffix, _FILE_AND_LINE_ );
+		sendSuffix=0;
+	}
+	if (suffix)
+	{
+		sendSuffix = (char*) rakMalloc_Ex(strlen(suffix)+1, _FILE_AND_LINE_);
+		strcpy(sendSuffix, suffix);
+	}
+}
+void TelnetTransport::SetSendPrefix(const char *prefix)
+{
+	if (sendPrefix)
+	{
+		rakFree_Ex(sendPrefix, _FILE_AND_LINE_ );
+		sendPrefix=0;
+	}
+	if (prefix)
+	{
+		sendPrefix = (char*) rakMalloc_Ex(strlen(prefix)+1, _FILE_AND_LINE_);
+		strcpy(sendPrefix, prefix);
+	}
 }
 void TelnetTransport::AutoAllocate(void)
 {
@@ -251,7 +340,7 @@ bool TelnetTransport::ReassembleLine(TelnetTransport::TelnetClient* remoteClient
 		remoteClient->textInput[remoteClient->cursorPosition]=0;
 		remoteClient->cursorPosition=0;
 #ifdef _PRINTF_DEBUG
-		printf("[Done] %s\n", remoteClient->textInput);
+		RAKNET_DEBUG_PRINTF("[Done] %s\n", remoteClient->textInput);
 #endif
 		return true;
 	}
@@ -261,7 +350,7 @@ bool TelnetTransport::ReassembleLine(TelnetTransport::TelnetClient* remoteClient
 		{
 			remoteClient->textInput[--remoteClient->cursorPosition]=0;
 #ifdef _PRINTF_DEBUG
-			printf("[Back] %s\n", remoteClient->textInput);
+			RAKNET_DEBUG_PRINTF("[Back] %s\n", remoteClient->textInput);
 #endif
 		}
 	}
@@ -271,7 +360,7 @@ bool TelnetTransport::ReassembleLine(TelnetTransport::TelnetClient* remoteClient
 		{
 			remoteClient->textInput[remoteClient->cursorPosition++]=c;
 #ifdef _PRINTF_DEBUG
-			printf("[Norm] %s\n", remoteClient->textInput);
+			RAKNET_DEBUG_PRINTF("[Norm] %s\n", remoteClient->textInput);
 #endif
 		}
 	}
@@ -281,3 +370,5 @@ bool TelnetTransport::ReassembleLine(TelnetTransport::TelnetClient* remoteClient
 #ifdef _MSC_VER
 #pragma warning( pop )
 #endif
+
+#endif // _RAKNET_SUPPORT_*

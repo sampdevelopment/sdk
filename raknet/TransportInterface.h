@@ -1,35 +1,42 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 /// \file
 /// \brief Contains TransportInterface from which you can derive custom transport providers for ConsoleServer.
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
+
 
 #ifndef __TRANSPORT_INTERFACE_H
 #define __TRANSPORT_INTERFACE_H
 
-#include "NetworkTypes.h"
+#include "RakNetTypes.h"
 #include "Export.h"
+#include "RakMemoryOverride.h"
 
-#define REMOTE_MAX_TEXT_INPUT 512
+#define REMOTE_MAX_TEXT_INPUT 2048
+
+namespace RakNet
+{
 
 class CommandParserInterface;
 
+
 /// \brief Defines an interface that is used to send and receive null-terminated strings.
-/// In practice this is only used by the CommandParser system for for servers.
+/// \details In practice this is only used by the CommandParser system for for servers.
 class RAK_DLL_EXPORT TransportInterface
 {
 public:
+	TransportInterface() {}
+	virtual ~TransportInterface() {}
+
 	/// Start the transport provider on the indicated port.
 	/// \param[in] port The port to start the transport provider on
 	/// \param[in] serverMode If true, you should allow incoming connections (I don't actually use this anywhere)
@@ -39,20 +46,20 @@ public:
 	/// Stop the transport provider.  You can clear memory and shutdown threads here.
 	virtual void Stop(void)=0;
 
-	/// Send a null-terminated string to \a playerId
+	/// Send a null-terminated string to \a systemAddress
 	/// If your transport method requires particular formatting of the outgoing data (e.g. you don't just send strings) you can do it here
 	/// and parse it out in Receive().
-	/// \param[in] playerId The player to send the string to
-	/// \param[in] data format specifier - same as printf
-	/// \param[in] ... format specification arguments - same as printf
-	virtual void Send( PlayerID playerId, const char *data, ... )=0;
+	/// \param[in] systemAddress The player to send the string to
+	/// \param[in] data format specifier - same as RAKNET_DEBUG_PRINTF
+	/// \param[in] ... format specification arguments - same as RAKNET_DEBUG_PRINTF
+	virtual void Send( SystemAddress systemAddress, const char *data, ... )=0;
 
-	/// Disconnect \a playerId .  The binary address and port defines the PlayerID structure.
-	/// \param[in] playerId The player/address to disconnect
-	virtual void CloseConnection( PlayerID playerId )=0;
+	/// Disconnect \a systemAddress .  The binary address and port defines the SystemAddress structure.
+	/// \param[in] systemAddress The player/address to disconnect
+	virtual void CloseConnection( SystemAddress systemAddress )=0;
 
 	/// Return a string. The string should be allocated and written to Packet::data .
-	/// The byte length should be written to Packet::length .  The player/address should be written to Packet::playerid
+	/// The byte length should be written to Packet::length .  The player/address should be written to Packet::systemAddress
 	/// If your transport protocol adds special formatting to the data stream you should parse it out before returning it in the packet
 	/// and thus only return a string in Packet::data
 	/// \return The packet structure containing the result of Receive, or 0 if no data is available
@@ -62,13 +69,13 @@ public:
 	/// \param[in] The packet to deallocate
 	virtual void DeallocatePacket( Packet *packet )=0;
 
-	/// If a new system connects to you, you should queue that event and return the playerId/address of that player in this function.
-	/// \return The PlayerID/address of the system
-	virtual PlayerID HasNewConnection(void)=0;
+	/// If a new system connects to you, you should queue that event and return the systemAddress/address of that player in this function.
+	/// \return The SystemAddress/address of the system
+	virtual SystemAddress HasNewIncomingConnection(void)=0;
 
-	/// If a system loses the connection, you should queue that event and return the playerId/address of that player in this function.
-	/// \return The PlayerID/address of the system
-	virtual PlayerID HasLostConnection(void)=0;
+	/// If a system loses the connection, you should queue that event and return the systemAddress/address of that player in this function.
+	/// \return The SystemAddress/address of the system
+	virtual SystemAddress HasLostConnection(void)=0;
 
 	/// Your transport provider can itself have command parsers if the transport layer has user-modifiable features
 	/// For example, your transport layer may have a password which you want remote users to be able to set or you may want
@@ -77,6 +84,8 @@ public:
 	virtual CommandParserInterface* GetCommandParser(void)=0;
 protected:
 };
+
+} // namespace RakNet
 
 #endif
 
