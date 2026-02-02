@@ -1,31 +1,37 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 /// \file
 /// \brief Contains RakNetCommandParser , used to send commands to an instance of RakPeer
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
+#include "NativeFeatureIncludes.h"
+#if _RAKNET_SUPPORT_RakNetCommandParser==1
 
 #ifndef __RAKNET_COMMAND_PARSER
 #define __RAKNET_COMMAND_PARSER
 
 #include "CommandParserInterface.h"
 #include "Export.h"
+
+namespace RakNet
+{
 class RakPeerInterface;
 
 /// \brief This allows a console client to call most of the functions in RakPeer
 class RAK_DLL_EXPORT RakNetCommandParser : public CommandParserInterface
 {
 public:
+	// GetInstance() and DestroyInstance(instance*)
+	STATIC_FACTORY_DECLARATIONS(RakNetCommandParser)
+
 	RakNetCommandParser();
 	~RakNetCommandParser();
 
@@ -34,27 +40,31 @@ public:
 	/// \param[in] numParameters How many parameters were passed along with the command
 	/// \param[in] parameterList The list of parameters.  parameterList[0] is the first parameter and so on.
 	/// \param[in] transport The transport interface we can use to write to
-	/// \param[in] playerId The player that sent this command.
+	/// \param[in] systemAddress The player that sent this command.
 	/// \param[in] originalString The string that was actually sent over the network, in case you want to do your own parsing
-	bool OnCommand(const char *command, unsigned numParameters, char **parameterList, TransportInterface *transport, PlayerID playerId, const char *originalString);
+	bool OnCommand(const char *command, unsigned numParameters, char **parameterList, TransportInterface *transport, const SystemAddress &systemAddress, const char *originalString);
 
 	/// You are responsible for overriding this function and returning a static string, which will identifier your parser.
 	/// This should return a static string
 	/// \return The name that you return.
-	char *GetName(void) const;
+	const char *GetName(void) const;
 
-	/// A callback for when you are expected to send a brief description of your parser to \a playerId
+	/// A callback for when you are expected to send a brief description of your parser to \a systemAddress
 	/// \param[in] transport The transport interface we can use to write to
-	/// \param[in] playerId The player that requested help.
-	void SendHelp(TransportInterface *transport, PlayerID playerId);
+	/// \param[in] systemAddress The player that requested help.
+	void SendHelp(TransportInterface *transport, const SystemAddress &systemAddress);
 
 	/// Records the instance of RakPeer to perform the desired commands on
-	/// \param[in] rakPeer The RakPeer instance, or a derived class (e.g. RakServer or RakClient)
-	void SetRakPeerInterface(RakPeerInterface *rakPeer);
+	/// \param[in] rakPeer The RakPeer instance, or a derived class (e.g. RakPeer or RakPeer)
+	void SetRakPeerInterface(RakNet::RakPeerInterface *rakPeer);
 protected:
 
 	/// Which instance of RakPeer we are working on.  Set from SetRakPeerInterface()
 	RakPeerInterface *peer;
 };
 
+} // namespace RakNet
+
 #endif
+
+#endif // _RAKNET_SUPPORT_*

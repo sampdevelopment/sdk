@@ -1,19 +1,34 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
+#include "NativeFeatureIncludes.h"
+#if _RAKNET_SUPPORT_LogCommandParser==1
+
 #include "LogCommandParser.h"
 #include "TransportInterface.h"
+
 #include <memory.h>
+
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
 
-#if (defined(__GNUC__)  || defined(__GCCXML__))
-#define _vsnprintf vsnprintf
-#define _stricmp strcasecmp
-#endif
-
+#include "LinuxStrings.h"
 
 #ifdef _MSC_VER
 #pragma warning( push )
 #endif
+
+using namespace RakNet;
+
+STATIC_FACTORY_DEFINITIONS(LogCommandParser,LogCommandParser);
 
 LogCommandParser::LogCommandParser()
 {
@@ -24,34 +39,33 @@ LogCommandParser::LogCommandParser()
 LogCommandParser::~LogCommandParser()
 {
 }
-#ifdef _MSC_VER
-#pragma warning( disable : 4100 ) // warning C4100: <variable name> : unreferenced formal parameter
-#endif
-bool LogCommandParser::OnCommand(const char *command, unsigned numParameters, char **parameterList, TransportInterface *transport, PlayerID playerId, const char *originalString)
+bool LogCommandParser::OnCommand(const char *command, unsigned numParameters, char **parameterList, TransportInterface *transport, const SystemAddress &systemAddress, const char *originalString)
 {
+	(void) originalString;
+
 	if (strcmp(command, "Subscribe")==0)
 	{
 		unsigned channelIndex;
 		if (numParameters==0)
 		{
-			Subscribe(playerId, 0);
-			transport->Send(playerId, "Subscribed to all channels.\r\n");
+			Subscribe(systemAddress, 0);
+			transport->Send(systemAddress, "Subscribed to all channels.\r\n");
 		}
 		else if (numParameters==1)
 		{
-			if ((channelIndex=Subscribe(playerId, parameterList[0]))!=(unsigned)-1)
+			if ((channelIndex=Subscribe(systemAddress, parameterList[0]))!=(unsigned)-1)
 			{
-				transport->Send(playerId, "You are now subscribed to channel %s.\r\n", channelNames[channelIndex]);
+				transport->Send(systemAddress, "You are now subscribed to channel %s.\r\n", channelNames[channelIndex]);
 			}
 			else
 			{
-				transport->Send(playerId, "Cannot find channel %s.\r\n", parameterList[0]);
-				PrintChannels(playerId, transport);
+				transport->Send(systemAddress, "Cannot find channel %s.\r\n", parameterList[0]);
+				PrintChannels(systemAddress, transport);
 			}
 		}
 		else
 		{
-			transport->Send(playerId, "Subscribe takes either 0 or 1 parameters.\r\n");
+			transport->Send(systemAddress, "Subscribe takes either 0 or 1 parameters.\r\n");
 		}
 	}
 	else if (strcmp(command, "Unsubscribe")==0)
@@ -59,46 +73,46 @@ bool LogCommandParser::OnCommand(const char *command, unsigned numParameters, ch
 		unsigned channelIndex;
 		if (numParameters==0)
 		{
-			Unsubscribe(playerId, 0);
-			transport->Send(playerId, "Unsubscribed from all channels.\r\n");
+			Unsubscribe(systemAddress, 0);
+			transport->Send(systemAddress, "Unsubscribed from all channels.\r\n");
 		}
 		else if (numParameters==1)
 		{
-			if ((channelIndex=Unsubscribe(playerId, parameterList[0]))!=(unsigned)-1)
+			if ((channelIndex=Unsubscribe(systemAddress, parameterList[0]))!=(unsigned)-1)
 			{
-				transport->Send(playerId, "You are now unsubscribed from channel %s.\r\n", channelNames[channelIndex]);
+				transport->Send(systemAddress, "You are now unsubscribed from channel %s.\r\n", channelNames[channelIndex]);
 			}
 			else
 			{
-				transport->Send(playerId, "Cannot find channel %s.\r\n", parameterList[0]);
-				PrintChannels(playerId, transport);
+				transport->Send(systemAddress, "Cannot find channel %s.\r\n", parameterList[0]);
+				PrintChannels(systemAddress, transport);
 			}
 		}
 		else
 		{
-			transport->Send(playerId, "Unsubscribe takes either 0 or 1 parameters.\r\n");
+			transport->Send(systemAddress, "Unsubscribe takes either 0 or 1 parameters.\r\n");
 		}
 	}
 
 	return true;
 }
-char *LogCommandParser::GetName(void) const
+const char *LogCommandParser::GetName(void) const
 {
 	return "Logger";
 }
-void LogCommandParser::SendHelp(TransportInterface *transport, PlayerID playerId)
+void LogCommandParser::SendHelp(TransportInterface *transport, const SystemAddress &systemAddress)
 {
-	transport->Send(playerId, "The logger will accept user log data via the Log(...) function.\r\n");
-	transport->Send(playerId, "Each log is associated with a named channel.\r\n");
-	transport->Send(playerId, "You can subscribe to or unsubscribe from named channels.\r\n");
-	PrintChannels(playerId, transport);
+	transport->Send(systemAddress, "The logger will accept user log data via the Log(...) function.\r\n");
+	transport->Send(systemAddress, "Each log is associated with a named channel.\r\n");
+	transport->Send(systemAddress, "You can subscribe to or unsubscribe from named channels.\r\n");
+	PrintChannels(systemAddress, transport);
 }
 void LogCommandParser::AddChannel(const char *channelName)
 {
-	unsigned channelIndex;
+	unsigned channelIndex=0;
 	channelIndex = GetChannelIndexFromName(channelName);
 	// Each channel can only be added once.
-	assert(channelIndex==(unsigned)-1);
+	RakAssert(channelIndex==(unsigned)-1);
 
 	unsigned i;
 	for (i=0; i < 32; i++)
@@ -112,7 +126,7 @@ void LogCommandParser::AddChannel(const char *channelName)
 	}
 
 	// No more available channels - max 32 with this implementation where I save subscribed channels with bit operations
-	assert(0);
+	RakAssert(0);
 }
 void LogCommandParser::WriteLog(const char *channelName, const char *format, ...)
 {
@@ -157,51 +171,48 @@ void LogCommandParser::WriteLog(const char *channelName, const char *format, ...
 	{
 		if (remoteUsers[i].channels & (1 << channelIndex))
 		{
-			trans->Send(remoteUsers[i].playerId, text);
+			trans->Send(remoteUsers[i].systemAddress, text);
 		}
 	}
 }
-void LogCommandParser::PrintChannels(PlayerID playerId, TransportInterface *transport) const
+void LogCommandParser::PrintChannels(const SystemAddress &systemAddress, TransportInterface *transport) const
 {
 	unsigned i;
 	bool anyChannels=false;
-	transport->Send(playerId, "CHANNELS:\r\n");
+	transport->Send(systemAddress, "CHANNELS:\r\n");
 	for (i=0; i < 32; i++)
 	{
 		if (channelNames[i])
 		{
-			transport->Send(playerId, "%i. %s\r\n", i+1,channelNames[i]);
+			transport->Send(systemAddress, "%i. %s\r\n", i+1,channelNames[i]);
 			anyChannels=true;
 		}
 	}
 	if (anyChannels==false)
-		transport->Send(playerId, "None.\r\n");
+		transport->Send(systemAddress, "None.\r\n");
 }
-#ifdef _MSC_VER
-#pragma warning( disable : 4100 ) // warning C4100: <variable name> : unreferenced formal parameter
-#endif
-void LogCommandParser::OnNewIncomingConnection(PlayerID playerId, TransportInterface *transport)
+void LogCommandParser::OnNewIncomingConnection(const SystemAddress &systemAddress, TransportInterface *transport)
 {
+	(void) systemAddress;
+	(void) transport;
 }
-#ifdef _MSC_VER
-#pragma warning( disable : 4100 ) // warning C4100: <variable name> : unreferenced formal parameter
-#endif
-void LogCommandParser::OnConnectionLost(PlayerID playerId, TransportInterface *transport)
+void LogCommandParser::OnConnectionLost(const SystemAddress &systemAddress, TransportInterface *transport)
 {
-	Unsubscribe(playerId, 0);
+	(void) transport;
+	Unsubscribe(systemAddress, 0);
 }
-unsigned LogCommandParser::Unsubscribe(PlayerID playerId, const char *channelName)
+unsigned LogCommandParser::Unsubscribe(const SystemAddress &systemAddress, const char *channelName)
 {
 	unsigned i;
 	for (i=0; i < remoteUsers.Size(); i++)
 	{
-		if (remoteUsers[i].playerId==playerId)
+		if (remoteUsers[i].systemAddress==systemAddress)
 		{
 			if (channelName==0)
 			{
 				// Unsubscribe from all and delete this user.
 				remoteUsers[i]=remoteUsers[remoteUsers.Size()-1];
-				remoteUsers.Del();
+				remoteUsers.RemoveFromEnd();
 				return 0;
 			}
 			else
@@ -218,7 +229,7 @@ unsigned LogCommandParser::Unsubscribe(PlayerID playerId, const char *channelNam
 	}
 	return (unsigned)-1;
 }
-unsigned LogCommandParser::Subscribe(PlayerID playerId, const char *channelName)
+unsigned LogCommandParser::Subscribe(const SystemAddress &systemAddress, const char *channelName)
 {
 	unsigned i;
 	unsigned channelIndex=(unsigned)-1;
@@ -231,7 +242,7 @@ unsigned LogCommandParser::Subscribe(PlayerID playerId, const char *channelName)
 
 	for (i=0; i < remoteUsers.Size(); i++)
 	{
-		if (remoteUsers[i].playerId==playerId)
+		if (remoteUsers[i].systemAddress==systemAddress)
 		{
 			if (channelName)
 				remoteUsers[i].channels|=1<<channelIndex; // Set this bit for an existing user
@@ -242,13 +253,13 @@ unsigned LogCommandParser::Subscribe(PlayerID playerId, const char *channelName)
 	}
 
 	// Make a new user
-	PlayerIDAndChannel newUser;
-	newUser.playerId = playerId;
+	SystemAddressAndChannel newUser;
+	newUser.systemAddress = systemAddress;
 	if (channelName)
 		newUser.channels=1<<channelIndex;
 	else
 		newUser.channels=0xFFFF;
-	remoteUsers.Insert(newUser);
+	remoteUsers.Insert(newUser, _FILE_AND_LINE_);
 	return channelIndex;
 }
 unsigned LogCommandParser::GetChannelIndexFromName(const char *channelName)
@@ -274,3 +285,5 @@ void LogCommandParser::OnTransportChange(TransportInterface *transport)
 #ifdef _MSC_VER
 #pragma warning( pop )
 #endif
+
+#endif // _RAKNET_SUPPORT_*

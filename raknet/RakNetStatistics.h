@@ -1,19 +1,17 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 /// \file
 /// \brief A structure that holds all statistical data returned by RakNet.
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
 
 
 #ifndef __RAK_NET_STATISTICS_H
@@ -21,137 +19,100 @@
 
 #include "PacketPriority.h"
 #include "Export.h"
-#include "NetworkTypes.h"
-#include "GetTime.h"
+#include "RakNetTypes.h"
+
+namespace RakNet
+{
+
+enum RNSPerSecondMetrics
+{
+	/// How many bytes per pushed via a call to RakPeerInterface::Send()
+	USER_MESSAGE_BYTES_PUSHED,
+
+	/// How many user message bytes were sent via a call to RakPeerInterface::Send(). This is less than or equal to USER_MESSAGE_BYTES_PUSHED.
+	/// A message would be pushed, but not yet sent, due to congestion control
+	USER_MESSAGE_BYTES_SENT,
+
+	/// How many user message bytes were resent. A message is resent if it is marked as reliable, and either the message didn't arrive or the message ack didn't arrive.
+	USER_MESSAGE_BYTES_RESENT,
+
+	/// How many user message bytes were received, and returned to the user successfully.
+	USER_MESSAGE_BYTES_RECEIVED_PROCESSED,
+
+	/// How many user message bytes were received, but ignored due to data format errors. This will usually be 0.
+	USER_MESSAGE_BYTES_RECEIVED_IGNORED,
+
+	/// How many actual bytes were sent, including per-message and per-datagram overhead, and reliable message acks
+	ACTUAL_BYTES_SENT,
+
+	/// How many actual bytes were received, including overead and acks.
+	ACTUAL_BYTES_RECEIVED,
+
+	/// \internal
+	RNS_PER_SECOND_METRICS_COUNT
+};
 
 /// \brief Network Statisics Usage 
 ///
 /// Store Statistics information related to network usage 
-struct RAK_DLL_EXPORT RakNetStatisticsStruct
+struct RAK_DLL_EXPORT RakNetStatistics
 {
-	///  Number of Messages in the send Buffer (high, medium, low priority)
-	unsigned messageSendBuffer[ NUMBER_OF_PRIORITIES ];
-	///  Number of messages sent (high, medium, low priority)
-	unsigned messagesSent[ NUMBER_OF_PRIORITIES ];
-	///  Number of data bits used for user messages
-	unsigned messageDataBitsSent[ NUMBER_OF_PRIORITIES ];
-	///  Number of total bits used for user messages, including headers
-	unsigned messageTotalBitsSent[ NUMBER_OF_PRIORITIES ];
-	
-	///  Number of packets sent containing only acknowledgements
-	unsigned packetsContainingOnlyAcknowlegements;
-	///  Number of acknowledgements sent
-	unsigned acknowlegementsSent;
-	///  Number of acknowledgements waiting to be sent
-	unsigned acknowlegementsPending;
-	///  Number of acknowledgements bits sent
-	unsigned acknowlegementBitsSent;
-	
-	///  Number of packets containing only acknowledgements and resends
-	unsigned packetsContainingOnlyAcknowlegementsAndResends;
-	
-	///  Number of messages resent
-	unsigned messageResends;
-	///  Number of bits resent of actual data
-	unsigned messageDataBitsResent;
-	///  Total number of bits resent, including headers
-	unsigned messagesTotalBitsResent;
-	///  Number of messages waiting for ack (// TODO - rename this)
-	unsigned messagesOnResendQueue;
-	
-	///  Number of messages not split for sending
-	unsigned numberOfUnsplitMessages;
-	///  Number of messages split for sending
-	unsigned numberOfSplitMessages;
-	///  Total number of splits done for sending
-	unsigned totalSplits;
-	
-	///  Total packets sent
-	unsigned packetsSent;
-	
-	///  Number of bits added by encryption
-	unsigned encryptionBitsSent;
-	///  total bits sent
-	unsigned totalBitsSent;
-	
-	///  Number of sequenced messages arrived out of order
-	unsigned sequencedMessagesOutOfOrder;
-	///  Number of sequenced messages arrived in order
-	unsigned sequencedMessagesInOrder;
-	
-	///  Number of ordered messages arrived out of order
-	unsigned orderedMessagesOutOfOrder;
-	///  Number of ordered messages arrived in order
-	unsigned orderedMessagesInOrder;
-	
-	///  Packets with a good CRC received
-	unsigned packetsReceived;
-	///  Packets with a bad CRC received
-	unsigned packetsWithBadCRCReceived;
-	///  Bits with a good CRC received
-	unsigned bitsReceived;
-	///  Bits with a bad CRC received
-	unsigned bitsWithBadCRCReceived;
-	///  Number of acknowledgement messages received for packets we are resending
-	unsigned acknowlegementsReceived;
-	///  Number of acknowledgement messages received for packets we are not resending
-	unsigned duplicateAcknowlegementsReceived;
-	///  Number of data messages (anything other than an ack) received that are valid and not duplicate
-	unsigned messagesReceived;
-	///  Number of data messages (anything other than an ack) received that are invalid
-	unsigned invalidMessagesReceived;
-	///  Number of data messages (anything other than an ack) received that are duplicate
-	unsigned duplicateMessagesReceived;
-	///  Number of messages waiting for reassembly
-	unsigned messagesWaitingForReassembly;
-	///  Number of messages in reliability output queue
-	unsigned internalOutputQueueSize;
-	///  Current bits per second
-	double bitsPerSecond;
-	///  connection start time
-	RakNet::Time connectionStartTime;
+	/// For each type in RNSPerSecondMetrics, what is the value over the last 1 second?
+	uint64_t valueOverLastSecond[RNS_PER_SECOND_METRICS_COUNT];
 
-	RakNetStatisticsStruct operator +=(const RakNetStatisticsStruct& other)
+	/// For each type in RNSPerSecondMetrics, what is the total value over the lifetime of the connection?
+	uint64_t runningTotal[RNS_PER_SECOND_METRICS_COUNT];
+	
+	/// When did the connection start?
+	/// \sa RakNet::GetTimeUS()
+	RakNet::TimeUS connectionStartTime;
+
+	/// Is our current send rate throttled by congestion control?
+	/// This value should be true if you send more data per second than your bandwidth capacity
+	bool isLimitedByCongestionControl;
+
+	/// If \a isLimitedByCongestionControl is true, what is the limit, in bytes per second?
+	uint64_t BPSLimitByCongestionControl;
+
+	/// Is our current send rate throttled by a call to RakPeer::SetPerConnectionOutgoingBandwidthLimit()?
+	bool isLimitedByOutgoingBandwidthLimit;
+
+	/// If \a isLimitedByOutgoingBandwidthLimit is true, what is the limit, in bytes per second?
+	uint64_t BPSLimitByOutgoingBandwidthLimit;
+
+	/// For each priority level, how many messages are waiting to be sent out?
+	unsigned int messageInSendBuffer[NUMBER_OF_PRIORITIES];
+
+	/// For each priority level, how many bytes are waiting to be sent out?
+	double bytesInSendBuffer[NUMBER_OF_PRIORITIES];
+
+	/// How many messages are waiting in the resend buffer? This includes messages waiting for an ack, so should normally be a small value
+	/// If the value is rising over time, you are exceeding the bandwidth capacity. See BPSLimitByCongestionControl 
+	unsigned int messagesInResendBuffer;
+
+	/// How many bytes are waiting in the resend buffer. See also messagesInResendBuffer
+	uint64_t bytesInResendBuffer;
+
+	/// Over the last second, what was our packetloss? This number will range from 0.0 (for none) to 1.0 (for 100%)
+	float packetlossLastSecond;
+
+	/// What is the average total packetloss over the lifetime of the connection?
+	float packetlossTotal;
+
+	RakNetStatistics& operator +=(const RakNetStatistics& other)
 	{
 		unsigned i;
 		for (i=0; i < NUMBER_OF_PRIORITIES; i++)
 		{
-			messageSendBuffer[i]+=other.messageSendBuffer[i];
-			messagesSent[i]+=other.messagesSent[i];
-			messageDataBitsSent[i]+=other.messageDataBitsSent[i];
-			messageTotalBitsSent[i]+=other.messageTotalBitsSent[i];
+			messageInSendBuffer[i]+=other.messageInSendBuffer[i];
+			bytesInSendBuffer[i]+=other.bytesInSendBuffer[i];
 		}
 
-		packetsContainingOnlyAcknowlegements+=other.packetsContainingOnlyAcknowlegements;
-		acknowlegementsSent+=other.packetsContainingOnlyAcknowlegements;
-		acknowlegementsPending+=other.acknowlegementsPending;
-		acknowlegementBitsSent+=other.acknowlegementBitsSent;
-		packetsContainingOnlyAcknowlegementsAndResends+=other.packetsContainingOnlyAcknowlegementsAndResends;
-		messageResends+=other.messageResends;
-		messageDataBitsResent+=other.messageDataBitsResent;
-		messagesTotalBitsResent+=other.messagesTotalBitsResent;
-		messagesOnResendQueue+=other.messagesOnResendQueue;
-		numberOfUnsplitMessages+=other.numberOfUnsplitMessages;
-		numberOfSplitMessages+=other.numberOfSplitMessages;
-		totalSplits+=other.totalSplits;
-		packetsSent+=other.packetsSent;
-		encryptionBitsSent+=other.encryptionBitsSent;
-		totalBitsSent+=other.totalBitsSent;
-		sequencedMessagesOutOfOrder+=other.sequencedMessagesOutOfOrder;
-		sequencedMessagesInOrder+=other.sequencedMessagesInOrder;
-		orderedMessagesOutOfOrder+=other.orderedMessagesOutOfOrder;
-		orderedMessagesInOrder+=other.orderedMessagesInOrder;
-		packetsReceived+=other.packetsReceived;
-		packetsWithBadCRCReceived+=other.packetsWithBadCRCReceived;
-		bitsReceived+=other.bitsReceived;
-		bitsWithBadCRCReceived+=other.bitsWithBadCRCReceived;
-		acknowlegementsReceived+=other.acknowlegementsReceived;
-		duplicateAcknowlegementsReceived+=other.duplicateAcknowlegementsReceived;
-		messagesReceived+=other.messagesReceived;
-		invalidMessagesReceived+=other.invalidMessagesReceived;
-		duplicateMessagesReceived+=other.duplicateMessagesReceived;
-		messagesWaitingForReassembly+=other.messagesWaitingForReassembly;
-		internalOutputQueueSize+=other.internalOutputQueueSize;
+		for (i=0; i < RNS_PER_SECOND_METRICS_COUNT; i++)
+		{
+			valueOverLastSecond[i]+=other.valueOverLastSecond[i];
+			runningTotal[i]+=other.runningTotal[i];
+		}
 
 		return *this;
 	}
@@ -164,6 +125,9 @@ struct RAK_DLL_EXPORT RakNetStatisticsStruct
 /// 0 low
 /// 1 medium 
 /// 2 high 
-void StatisticsToString( RakNetStatisticsStruct *s, char *buffer, int verbosityLevel );
+/// 3 debugging congestion control
+void RAK_DLL_EXPORT StatisticsToString( RakNetStatistics *s, char *buffer, int verbosityLevel );
+
+} // namespace RakNet
 
 #endif

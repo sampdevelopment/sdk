@@ -1,8 +1,12 @@
-#include <assert.h>
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
 
-// So stupid Linux doesn't assert in release
-#ifdef _DEBUG
-#define RakAssert(x) assert(x);
-#else
-#define RakAssert(x) 
-#endif
+#include <assert.h>
+#include "RakNetDefines.h"
