@@ -1,19 +1,19 @@
-/// \file
-/// \brief \b [Internal] Weighted graph.  I'm assuming the indices are complex map types, rather than sequential numbers (which could be implemented much more efficiently).
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
+/// \file DS_WeightedGraph.h
+/// \internal
+/// \brief Weighted graph.  
+/// \details I'm assuming the indices are complex map types, rather than sequential numbers (which could be implemented much more efficiently).
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
 
 #ifndef __WEIGHTED_GRAPH_H
 #define __WEIGHTED_GRAPH_H
@@ -23,7 +23,8 @@
 #include "DS_Heap.h"
 #include "DS_Queue.h"
 #include "DS_Tree.h"
-#include <assert.h>
+#include "RakAssert.h"
+#include "RakMemoryOverride.h"
 #ifdef _DEBUG
 #include <stdio.h>
 #endif
@@ -70,7 +71,7 @@ namespace DataStructures
 		// 08/23/06 Won't compile as a DLL inside this struct
 	//	struct  
 	//	{
-			bool isValid;
+			bool isValidPath;
 			node_type rootNode;
 			DataStructures::OrderedList<node_type, node_type> costMatrixIndices;
 			weight_type *costMatrix;
@@ -87,7 +88,7 @@ namespace DataStructures
 	template <class node_type, class weight_type, bool allow_unlinkedNodes>
 		WeightedGraph<node_type, weight_type, allow_unlinkedNodes>::WeightedGraph()
 	{
-		isValid=false;
+		isValidPath=false;
 		costMatrix=0;
 	}
 
@@ -102,13 +103,13 @@ namespace DataStructures
 	{
 		adjacencyLists=original_copy.adjacencyLists;
 		
-		isValid=original_copy.isValid;
-		if (isValid)
+		isValidPath=original_copy.isValidPath;
+		if (isValidPath)
 		{
 			rootNode=original_copy.rootNode;
 			costMatrixIndices=original_copy.costMatrixIndices;
-			costMatrix = new weight_type[costMatrixIndices.Size() * costMatrixIndices.Size()];
-			leastNodeArray = new node_type[costMatrixIndices.Size()];
+			costMatrix = RakNet::OP_NEW_ARRAY<weight_type>(costMatrixIndices.Size() * costMatrixIndices.Size(), _FILE_AND_LINE_ );
+			leastNodeArray = RakNet::OP_NEW_ARRAY<node_type>(costMatrixIndices.Size(), _FILE_AND_LINE_ );
 			memcpy(costMatrix, original_copy.costMatrix, costMatrixIndices.Size() * costMatrixIndices.Size() * sizeof(weight_type));
 			memcpy(leastNodeArray, original_copy.leastNodeArray, costMatrixIndices.Size() * sizeof(weight_type));
 		}
@@ -119,13 +120,13 @@ namespace DataStructures
 	{
 		adjacencyLists=original_copy.adjacencyLists;
 
-		isValid=original_copy.isValid;
-		if (isValid)
+		isValidPath=original_copy.isValidPath;
+		if (isValidPath)
 		{
 			rootNode=original_copy.rootNode;
 			costMatrixIndices=original_copy.costMatrixIndices;
-			costMatrix = new weight_type[costMatrixIndices.Size() * costMatrixIndices.Size()];
-			leastNodeArray = new node_type[costMatrixIndices.Size()];
+			costMatrix = RakNet::OP_NEW_ARRAY<weight_type>(costMatrixIndices.Size() * costMatrixIndices.Size(), _FILE_AND_LINE_ );
+			leastNodeArray = RakNet::OP_NEW_ARRAY<node_type>(costMatrixIndices.Size(), _FILE_AND_LINE_ );
 			memcpy(costMatrix, original_copy.costMatrix, costMatrixIndices.Size() * costMatrixIndices.Size() * sizeof(weight_type));
 			memcpy(leastNodeArray, original_copy.leastNodeArray, costMatrixIndices.Size() * sizeof(weight_type));
 		}
@@ -136,7 +137,7 @@ namespace DataStructures
 	template <class node_type, class weight_type, bool allow_unlinkedNodes>
 		void WeightedGraph<node_type, weight_type, allow_unlinkedNodes>::AddNode(const node_type &node)
 	{
-		adjacencyLists.SetNew(node, new DataStructures::Map<node_type, weight_type>);
+		adjacencyLists.SetNew(node, RakNet::OP_NEW<DataStructures::Map<node_type, weight_type> >( _FILE_AND_LINE_) );
 	}
 
 	template <class node_type, class weight_type, bool allow_unlinkedNodes>
@@ -145,10 +146,10 @@ namespace DataStructures
 		unsigned i;
 		DataStructures::Queue<node_type> removeNodeQueue;
 
-		removeNodeQueue.Push(node);
+		removeNodeQueue.Push(node, _FILE_AND_LINE_ );
 		while (removeNodeQueue.Size())
 		{
-			delete adjacencyLists.Pop(removeNodeQueue.Pop());
+			RakNet::OP_DELETE(adjacencyLists.Pop(removeNodeQueue.Pop()), _FILE_AND_LINE_);
 
 			// Remove this node from all of the other lists as well
 			for (i=0; i < adjacencyLists.Size(); i++)
@@ -159,7 +160,7 @@ namespace DataStructures
 #pragma warning( disable : 4127 ) // warning C4127: conditional expression is constant
 #endif
 				if (allow_unlinkedNodes==false && adjacencyLists[i]->Size()==0)
-					removeNodeQueue.Push(adjacencyLists.GetKeyAtIndex(i));
+					removeNodeQueue.Push(adjacencyLists.GetKeyAtIndex(i), _FILE_AND_LINE_ );
 			}
 		}
 
@@ -215,7 +216,7 @@ namespace DataStructures
 	{
 		unsigned i;
 		for (i=0; i < adjacencyLists.Size(); i++)
-			delete adjacencyLists[i];
+			RakNet::OP_DELETE(adjacencyLists[i], _FILE_AND_LINE_);
 		adjacencyLists.Clear();
 
 		ClearDijkstra();
@@ -224,15 +225,15 @@ namespace DataStructures
 	template <class node_type, class weight_type, bool allow_unlinkedNodes>
 		bool WeightedGraph<node_type, weight_type, allow_unlinkedNodes>::GetShortestPath(DataStructures::List<node_type> &path, node_type startNode, node_type endNode, weight_type INFINITE_WEIGHT)
 	{
-		path.Clear();
+		path.Clear(false, _FILE_AND_LINE_);
 		if (startNode==endNode)
 		{
-			path.Insert(startNode);
-			path.Insert(endNode);
+			path.Insert(startNode, _FILE_AND_LINE_);
+			path.Insert(endNode, _FILE_AND_LINE_);
 			return true;
 		}
 
-		if (isValid==false || rootNode!=startNode)
+		if (isValidPath==false || rootNode!=startNode)
 		{
 			ClearDijkstra();
 			GenerateDisjktraMatrix(startNode, INFINITE_WEIGHT);
@@ -256,8 +257,8 @@ namespace DataStructures
 		row=costMatrixIndices.Size()-2;
 		if (row==0)
 		{
-			path.Insert(startNode);
-			path.Insert(endNode);
+			path.Insert(startNode, _FILE_AND_LINE_);
+			path.Insert(endNode, _FILE_AND_LINE_);
 			return true;
 		}
 		currentWeight=costMatrix[row*adjacencyLists.Size() + col];
@@ -267,7 +268,7 @@ namespace DataStructures
 			return true;
 		}
 		vertex=endNode;
-		outputQueue.PushAtHead(vertex);
+		outputQueue.PushAtHead(vertex, 0, _FILE_AND_LINE_);
 		row--;
 #ifdef _MSC_VER
 #pragma warning( disable : 4127 ) // warning C4127: conditional expression is constant
@@ -278,25 +279,25 @@ namespace DataStructures
 			{
 				if (row==0)
 				{
-					path.Insert(startNode);
+					path.Insert(startNode, _FILE_AND_LINE_);
 					for (col=0; outputQueue.Size(); col++)
-						path.Insert(outputQueue.Pop());
+						path.Insert(outputQueue.Pop(), _FILE_AND_LINE_);
 					return true;
 				}
 				--row;
 			}
 
 			vertex=leastNodeArray[row];
-			outputQueue.PushAtHead(vertex);
+			outputQueue.PushAtHead(vertex, 0, _FILE_AND_LINE_);
 			if (row==0)
 				break;
 			col=costMatrixIndices.GetIndexFromKey(vertex, &objectExists);
 			currentWeight=costMatrix[row*adjacencyLists.Size() + col];
 		}
 
-		path.Insert(startNode);
+		path.Insert(startNode, _FILE_AND_LINE_);
 		for (col=0; outputQueue.Size(); col++)
-			path.Insert(outputQueue.Pop());
+			path.Insert(outputQueue.Pop(), _FILE_AND_LINE_);
 		return true;
 	}
 
@@ -336,7 +337,7 @@ namespace DataStructures
 		for (i=0; i < inputNodes->Size(); i++)
 		{
 			res=GetShortestPath(path, startNode, (*inputNodes)[i], INFINITE_WEIGHT);
-			if (res)
+			if (res && path.Size()>0)
 			{
 				for (j=0; j < path.Size()-1; j++)
 				{
@@ -361,11 +362,11 @@ namespace DataStructures
 
 		for (i=0; i < adjacencyList->Size(); i++)
 		{
-			nap2.node=new DataStructures::Tree<node_type>;
+			nap2.node=RakNet::OP_NEW<DataStructures::Tree<node_type> >( _FILE_AND_LINE_ );
 			nap2.node->data=adjacencyList->GetKeyAtIndex(i);
 			nap2.parent=current;
-			nodesToProcess.Push(nap2);
-			current->children.Insert(nap2.node);
+			nodesToProcess.Push(nap2, _FILE_AND_LINE_ );
+			current->children.Insert(nap2.node, _FILE_AND_LINE_);
 		}
 
 		while (nodesToProcess.Size())
@@ -379,11 +380,11 @@ namespace DataStructures
 				key=adjacencyList->GetKeyAtIndex(i);
 				if (key!=nap.parent->data)
 				{
-					nap2.node=new DataStructures::Tree<node_type>;
+					nap2.node=RakNet::OP_NEW<DataStructures::Tree<node_type> >( _FILE_AND_LINE_ );
 					nap2.node->data=key;
 					nap2.parent=current;
-					nodesToProcess.Push(nap2);
-					current->children.Insert(nap2.node);
+					nodesToProcess.Push(nap2, _FILE_AND_LINE_ );
+					current->children.Insert(nap2.node, _FILE_AND_LINE_);
 				}				
 			}
 		}
@@ -394,8 +395,11 @@ namespace DataStructures
 	template <class node_type, class weight_type, bool allow_unlinkedNodes>
 		void WeightedGraph<node_type, weight_type, allow_unlinkedNodes>::GenerateDisjktraMatrix(node_type startNode, weight_type INFINITE_WEIGHT)
 	{
-		costMatrix = new weight_type[adjacencyLists.Size() * adjacencyLists.Size()];
-		leastNodeArray = new node_type[adjacencyLists.Size()];
+		if (adjacencyLists.Size()==0)
+			return;
+
+		costMatrix = RakNet::OP_NEW_ARRAY<weight_type>(adjacencyLists.Size() * adjacencyLists.Size(), _FILE_AND_LINE_ );
+		leastNodeArray = RakNet::OP_NEW_ARRAY<node_type>(adjacencyLists.Size(), _FILE_AND_LINE_ );
 
 		node_type currentNode;
 		unsigned col, row, row2, openSetIndex;
@@ -409,7 +413,7 @@ namespace DataStructures
 		for (col=0; col < adjacencyLists.Size(); col++)
 		{
 			// This should be already sorted, so it's a bit inefficient to do an insertion sort, but what the heck
-			costMatrixIndices.Insert(adjacencyLists.GetKeyAtIndex(col),adjacencyLists.GetKeyAtIndex(col));
+			costMatrixIndices.Insert(adjacencyLists.GetKeyAtIndex(col),adjacencyLists.GetKeyAtIndex(col), true, _FILE_AND_LINE_);
 		}
 		for (col=0; col < adjacencyLists.Size() * adjacencyLists.Size(); col++)
 			costMatrix[col]=INFINITE_WEIGHT;
@@ -419,9 +423,12 @@ namespace DataStructures
 		rootNode=startNode;
 
 		// Clear the starting node column
-		adjacentIndex=adjacencyLists.GetIndexAtKey(startNode);
-		for (row2=0; row2 < adjacencyLists.Size(); row2++)
-			costMatrix[row2*adjacencyLists.Size() + adjacentIndex]=0;
+		if (adjacencyLists.Size())
+		{
+			adjacentIndex=adjacencyLists.GetIndexAtKey(startNode);
+			for (row2=0; row2 < adjacencyLists.Size(); row2++)
+				costMatrix[row2*adjacencyLists.Size() + adjacentIndex]=0;
+		}
 
 		while (row < adjacencyLists.Size()-1)
 		{
@@ -444,9 +451,9 @@ namespace DataStructures
 			}
 
 			// Find the lowest in the open set
-			minHeap.Clear();
+			minHeap.Clear(true,_FILE_AND_LINE_);
 			for (openSetIndex=0; openSetIndex < openSet.Size(); openSetIndex++)
-				minHeap.Push(openSet[openSetIndex], openSet.GetKeyAtIndex(openSetIndex));
+				minHeap.Push(openSet[openSetIndex], openSet.GetKeyAtIndex(openSetIndex),_FILE_AND_LINE_);
 
 			/*
 			unsigned i,j;
@@ -454,17 +461,17 @@ namespace DataStructures
 			{
 				for (j=0; j < adjacencyLists.Size(); j++)
 				{
-					printf("%2i ", costMatrix[i*adjacencyLists.Size() + j]);
+					RAKNET_DEBUG_PRINTF("%2i ", costMatrix[i*adjacencyLists.Size() + j]);
 				}
-				printf("Node=%i", leastNodeArray[i]);
-				printf("\n");
+				RAKNET_DEBUG_PRINTF("Node=%i", leastNodeArray[i]);
+				RAKNET_DEBUG_PRINTF("\n");
 			}
 			*/
 
 			if (minHeap.Size()==0)
 			{
 				// Unreachable nodes
-				isValid=true;
+				isValidPath=true;
 				return;
 			}
 
@@ -482,26 +489,26 @@ namespace DataStructures
 		{
 			for (j=0; j < adjacencyLists.Size(); j++)
 			{
-				printf("%2i ", costMatrix[i*adjacencyLists.Size() + j]);
+				RAKNET_DEBUG_PRINTF("%2i ", costMatrix[i*adjacencyLists.Size() + j]);
 			}
-			printf("Node=%i", leastNodeArray[i]);
-			printf("\n");
+			RAKNET_DEBUG_PRINTF("Node=%i", leastNodeArray[i]);
+			RAKNET_DEBUG_PRINTF("\n");
 		}
 #endif
 		*/
 
-		isValid=true;
+		isValidPath=true;
 	}
 
 	template <class node_type, class weight_type, bool allow_unlinkedNodes>
 		void WeightedGraph<node_type, weight_type, allow_unlinkedNodes>::ClearDijkstra(void)
 	{
-		if (isValid)
+		if (isValidPath)
 		{
-			isValid=false;
-			delete [] costMatrix;
-			delete [] leastNodeArray;
-			costMatrixIndices.Clear();
+			isValidPath=false;
+			RakNet::OP_DELETE_ARRAY(costMatrix, _FILE_AND_LINE_);
+			RakNet::OP_DELETE_ARRAY(leastNodeArray, _FILE_AND_LINE_);
+			costMatrixIndices.Clear(false, _FILE_AND_LINE_);
 		}
 	}
 
@@ -512,19 +519,19 @@ namespace DataStructures
 		unsigned i,j;
 		for (i=0; i < adjacencyLists.Size(); i++)
 		{
-			//printf("%i connected to ", i);
-			printf("%s connected to ", adjacencyLists.GetKeyAtIndex(i).playerId.ToString());
+			//RAKNET_DEBUG_PRINTF("%i connected to ", i);
+			RAKNET_DEBUG_PRINTF("%s connected to ", adjacencyLists.GetKeyAtIndex(i).systemAddress.ToString());
 
 			if (adjacencyLists[i]->Size()==0)
-				printf("<Empty>");
+				RAKNET_DEBUG_PRINTF("<Empty>");
 			else
 			{
 				for (j=0; j < adjacencyLists[i]->Size(); j++)
-				//	printf("%i (%.2f) ", adjacencyLists.GetIndexAtKey(adjacencyLists[i]->GetKeyAtIndex(j)), (float) adjacencyLists[i]->operator[](j) );
-					printf("%s (%.2f) ", adjacencyLists[i]->GetKeyAtIndex(j).playerId.ToString(), (float) adjacencyLists[i]->operator[](j) );
+				//	RAKNET_DEBUG_PRINTF("%i (%.2f) ", adjacencyLists.GetIndexAtKey(adjacencyLists[i]->GetKeyAtIndex(j)), (float) adjacencyLists[i]->operator[](j) );
+					RAKNET_DEBUG_PRINTF("%s (%.2f) ", adjacencyLists[i]->GetKeyAtIndex(j).systemAddress.ToString(), (float) adjacencyLists[i]->operator[](j) );
 			}
 
-			printf("\n");
+			RAKNET_DEBUG_PRINTF("\n");
 		}
 #endif
 	}

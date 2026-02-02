@@ -1,112 +1,231 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 /// \file
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
+
+#if defined(_WIN32)
+#include "WindowsIncludes.h"
+
+ #if !defined(WINDOWS_PHONE_8)
+		// To call timeGetTime
+		// on Code::Blocks, this needs to be libwinmm.a instead
+		#pragma comment(lib, "Winmm.lib")
+	#endif
+
+#endif
 
 #include "GetTime.h"
 
-#ifdef _WIN32
-#include <Windows.h>
+
+
+
+#if defined(_WIN32)
+//DWORD mProcMask;
+//DWORD mSysMask;
+//HANDLE mThread;
+
+
+
+
+
+
+
+
+
 #else
 #include <sys/time.h>
 #include <unistd.h>
-static RakNet::Time64 initialTime;
-static bool initialized = false;
+RakNet::TimeUS initialTime;
 #endif
 
+static bool initialized=false;
+
 #if defined(GET_TIME_SPIKE_LIMIT) && GET_TIME_SPIKE_LIMIT>0
+#include "SimpleMutex.h"
+RakNet::TimeUS lastNormalizedReturnedValue=0;
+RakNet::TimeUS lastNormalizedInputValue=0;
 /// This constraints timer forward jumps to 1 second, and does not let it jump backwards
 /// See http://support.microsoft.com/kb/274323 where the timer can sometimes jump forward by hours or days
 /// This also has the effect where debugging a sending system won't treat the time spent halted past 1 second as elapsed network time
-#include "SimpleMutex.h"
-static RakNet::Time64 lastNormalizedReturnedValue = 0;
-static RakNet::Time64 lastNormalizedInputValue = 0;
-static RakNet::Time64 NormalizeTime(RakNet::Time64 timeIn)
+RakNet::TimeUS NormalizeTime(RakNet::TimeUS timeIn)
 {
-	RakNet::Time64 diff, lastNormalizedReturnedValueCopy;
-	static SimpleMutex mutex;
-
+	RakNet::TimeUS diff, lastNormalizedReturnedValueCopy;
+	static RakNet::SimpleMutex mutex;
+	
 	mutex.Lock();
-	if (timeIn >= lastNormalizedInputValue)
+	if (timeIn>=lastNormalizedInputValue)
 	{
-		diff = timeIn - lastNormalizedInputValue;
+		diff = timeIn-lastNormalizedInputValue;
 		if (diff > GET_TIME_SPIKE_LIMIT)
-			lastNormalizedReturnedValue += GET_TIME_SPIKE_LIMIT;
+			lastNormalizedReturnedValue+=GET_TIME_SPIKE_LIMIT;
 		else
-			lastNormalizedReturnedValue += diff;
+			lastNormalizedReturnedValue+=diff;
 	}
 	else
-		lastNormalizedReturnedValue += GET_TIME_SPIKE_LIMIT;
+		lastNormalizedReturnedValue+=GET_TIME_SPIKE_LIMIT;
 
-	lastNormalizedInputValue = timeIn;
-	lastNormalizedReturnedValueCopy = lastNormalizedReturnedValue;
+	lastNormalizedInputValue=timeIn;
+	lastNormalizedReturnedValueCopy=lastNormalizedReturnedValue;
 	mutex.Unlock();
 
 	return lastNormalizedReturnedValueCopy;
 }
-#endif
-
-RakNet::Time64 RakNet::GetTime64(void)
+#endif // #if defined(GET_TIME_SPIKE_LIMIT) && GET_TIME_SPIKE_LIMIT>0
+RakNet::Time RakNet::GetTime( void )
 {
-#ifdef _WIN32
-	Time64 curTime;
-	LARGE_INTEGER PerfVal, yo1;
+	return (RakNet::Time)(GetTimeUS()/1000);
+}
+RakNet::TimeMS RakNet::GetTimeMS( void )
+{
+	return (RakNet::TimeMS)(GetTimeUS()/1000);
+}
 
-	QueryPerformanceFrequency(&yo1);
-	QueryPerformanceCounter(&PerfVal);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#if   defined(_WIN32)
+RakNet::TimeUS GetTimeUS_Windows( void )
+{
+	if ( initialized == false)
+	{
+		initialized = true;
+
+		// Save the current process
+#if !defined(_WIN32_WCE)
+//		HANDLE mProc = GetCurrentProcess();
+
+		// Get the current Affinity
+#if _MSC_VER >= 1400 && defined (_M_X64)
+//		GetProcessAffinityMask(mProc, (PDWORD_PTR)&mProcMask, (PDWORD_PTR)&mSysMask);
+#else
+//		GetProcessAffinityMask(mProc, &mProcMask, &mSysMask);
+#endif
+//		mThread = GetCurrentThread();
+
+#endif // _WIN32_WCE
+	}	
+
+	// 9/26/2010 In China running LuDaShi, QueryPerformanceFrequency has to be called every time because CPU clock speeds can be different
+	RakNet::TimeUS curTime;
+	LARGE_INTEGER PerfVal;
+	LARGE_INTEGER yo1;
+
+	QueryPerformanceFrequency( &yo1 );
+	QueryPerformanceCounter( &PerfVal );
 
 	__int64 quotient, remainder;
-	quotient = ((PerfVal.QuadPart) / yo1.QuadPart);
-	remainder = ((PerfVal.QuadPart) % yo1.QuadPart);
-	curTime = ((Time64)quotient * (Time64)1000000 +
-		(remainder * (Time64)1000000 / yo1.QuadPart));
+	quotient=((PerfVal.QuadPart) / yo1.QuadPart);
+	remainder=((PerfVal.QuadPart) % yo1.QuadPart);
+	curTime = (RakNet::TimeUS) quotient*(RakNet::TimeUS)1000000 + (remainder*(RakNet::TimeUS)1000000 / yo1.QuadPart);
 
 #if defined(GET_TIME_SPIKE_LIMIT) && GET_TIME_SPIKE_LIMIT>0
 	return NormalizeTime(curTime);
 #else
 	return curTime;
-#endif
-
-#else // _WIN32
+#endif // #if defined(GET_TIME_SPIKE_LIMIT) && GET_TIME_SPIKE_LIMIT>0
+}
+#elif defined(__GNUC__)  || defined(__GCCXML__) || defined(__S3E__)
+RakNet::TimeUS GetTimeUS_Linux( void )
+{
 	timeval tp;
-	if (initialized == false)
+	if ( initialized == false)
 	{
-		gettimeofday(&tp, 0);
-		initialized = true;
-		initialTime = ((tp.tv_sec) * (Time64)1000000 + (tp.tv_usec));
+		gettimeofday( &tp, 0 );
+		initialized=true;
+		// I do this because otherwise RakNet::Time in milliseconds won't work as it will underflow when dividing by 1000 to do the conversion
+		initialTime = ( tp.tv_sec ) * (RakNet::TimeUS) 1000000 + ( tp.tv_usec );
 	}
 
-	Time64 curTime;
-	gettimeofday(&tp, 0);
-	curTime = ((tp.tv_sec) * (Time64) 1000000 + (tp.tv_usec));
+	// GCC
+	RakNet::TimeUS curTime;
+	gettimeofday( &tp, 0 );
+
+	curTime = ( tp.tv_sec ) * (RakNet::TimeUS) 1000000 + ( tp.tv_usec );
 
 #if defined(GET_TIME_SPIKE_LIMIT) && GET_TIME_SPIKE_LIMIT>0
 	return NormalizeTime(curTime - initialTime);
 #else
 	return curTime - initialTime;
-#endif 
-
-#endif // _WIN32
+#endif // #if defined(GET_TIME_SPIKE_LIMIT) && GET_TIME_SPIKE_LIMIT>0
 }
+#endif
 
-RakNet::Time32 RakNet::GetTime32(void)
+RakNet::TimeUS RakNet::GetTimeUS( void )
 {
-	return (Time32)(GetTime64() / 1000);
-}
 
-RakNet::Time RakNet::GetTime(void)
+
+
+
+
+
+#if   defined(_WIN32)
+	return GetTimeUS_Windows();
+#else
+	return GetTimeUS_Linux();
+#endif
+}
+bool RakNet::GreaterThan(RakNet::Time a, RakNet::Time b)
 {
-	return (Time)(GetTime64() / 1000);
+	// a > b?
+	const RakNet::Time halfSpan =(RakNet::Time) (((RakNet::Time)(const RakNet::Time)-1)/(RakNet::Time)2);
+	return b!=a && b-a>halfSpan;
 }
-
+bool RakNet::LessThan(RakNet::Time a, RakNet::Time b)
+{
+	// a < b?
+	const RakNet::Time halfSpan = ((RakNet::Time)(const RakNet::Time)-1)/(RakNet::Time)2;
+	return b!=a && b-a<halfSpan;
+}

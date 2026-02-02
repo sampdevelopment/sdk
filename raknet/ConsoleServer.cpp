@@ -1,3 +1,16 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
+#include "NativeFeatureIncludes.h"
+#if _RAKNET_SUPPORT_ConsoleServer==1
+
 #include "ConsoleServer.h"
 #include "TransportInterface.h"
 #include "CommandParserInterface.h"
@@ -7,17 +20,22 @@
 #define COMMAND_DELINATOR ' '
 #define COMMAND_DELINATOR_TOGGLE '"'
 
-#if (defined(__GNUC__)  || defined(__GCCXML__)) && !defined(_stricmp)
-#define _stricmp strcasecmp
-#endif
+#include "LinuxStrings.h"
+
+using namespace RakNet;
+
+STATIC_FACTORY_DEFINITIONS(ConsoleServer,ConsoleServer);
 
 ConsoleServer::ConsoleServer()
 {
 	transport=0;
 	password[0]=0;
+	prompt=0;
 }
 ConsoleServer::~ConsoleServer()
 {
+	if (prompt)
+		rakFree_Ex(prompt, _FILE_AND_LINE_);
 }
 void ConsoleServer::SetTransportProvider(TransportInterface *transportInterface, unsigned short port)
 {
@@ -55,12 +73,12 @@ void ConsoleServer::AddCommandParser(CommandParserInterface *commandParserInterf
         if (_stricmp(commandParserList[i]->GetName(), commandParserInterface->GetName())==0)
 		{
 			// Naming conflict between two command parsers
-			assert(0);
+			RakAssert(0);
 			return;
 		}
 	}
 
-	commandParserList.Insert(commandParserInterface);
+	commandParserList.Insert(commandParserInterface, _FILE_AND_LINE_);
 	if (transport)
 		commandParserInterface->OnTransportChange(transport);
 }
@@ -76,7 +94,7 @@ void ConsoleServer::RemoveCommandParser(CommandParserInterface *commandParserInt
 		if (commandParserList[i]==commandParserInterface)
 		{
 			commandParserList[i]=commandParserList[commandParserList.Size()-1];
-			commandParserList.Del();
+			commandParserList.RemoveFromEnd();
 			return;
 		}
 	}
@@ -86,14 +104,14 @@ void ConsoleServer::Update(void)
 	unsigned i;
 	char *parameterList[20]; // Up to 20 parameters
 	unsigned numParameters;
-	PlayerID newOrLostConnectionId;
-	Packet *p;
-	RegisteredCommand rc;
+	RakNet::SystemAddress newOrLostConnectionId;
+	RakNet::Packet *p;
+	RakNet::RegisteredCommand rc;
 
 	p = transport->Receive();
-	newOrLostConnectionId=transport->HasNewConnection();
+	newOrLostConnectionId=transport->HasNewIncomingConnection();
 
-	if (newOrLostConnectionId!=UNASSIGNED_PLAYER_ID)
+	if (newOrLostConnectionId!=UNASSIGNED_SYSTEM_ADDRESS)
 	{
 		for (i=0; i < commandParserList.Size(); i++)
 		{
@@ -102,10 +120,11 @@ void ConsoleServer::Update(void)
 
 		transport->Send(newOrLostConnectionId, "Connected to remote command console.\r\nType 'help' for help.\r\n");
 		ListParsers(newOrLostConnectionId);
+		ShowPrompt(newOrLostConnectionId);
 	}
 
 	newOrLostConnectionId=transport->HasLostConnection();
-	if (newOrLostConnectionId!=UNASSIGNED_PLAYER_ID)
+	if (newOrLostConnectionId!=UNASSIGNED_SYSTEM_ADDRESS)
 	{
 		for (i=0; i < commandParserList.Size(); i++)
 			commandParserList[i]->OnConnectionLost(newOrLostConnectionId, transport);
@@ -117,25 +136,32 @@ void ConsoleServer::Update(void)
 		char copy[REMOTE_MAX_TEXT_INPUT];
 		memcpy(copy, p->data, p->length);
 		copy[p->length]=0;
-		CommandParserInterface::ParseConsoleString((char*)p->data, COMMAND_DELINATOR, COMMAND_DELINATOR_TOGGLE, &numParameters, parameterList, 20); // Up to 20 parameters
+		RakNet::CommandParserInterface::ParseConsoleString((char*)p->data, COMMAND_DELINATOR, COMMAND_DELINATOR_TOGGLE, &numParameters, parameterList, 20); // Up to 20 parameters
+		if (numParameters==0)
+		{
+			transport->DeallocatePacket(p);
+			p = transport->Receive();
+			continue;
+		}
 		if (_stricmp(*parameterList, "help")==0 && numParameters<=2)
 		{
 			// Find the parser specified and display help for it
 			if (numParameters==1)
 			{
-				transport->Send(p->playerId, "\r\nINSTRUCTIONS:\r\n");
-				transport->Send(p->playerId, "Enter commands on your keyboard, using spaces to delineate parameters.\r\n");
-				transport->Send(p->playerId, "You can use quotation marks to toggle space delineation.\r\n");
-				transport->Send(p->playerId, "You can connect multiple times from the same computer.\r\n");
-				transport->Send(p->playerId, "You can direct commands to a parser by prefixing the parser name or number.\r\n");
-				transport->Send(p->playerId, "COMMANDS:\r\n");
-				transport->Send(p->playerId, "help                                        Show this display.\r\n");
-				transport->Send(p->playerId, "help <ParserName>                           Show help on a particular parser.\r\n");
-				transport->Send(p->playerId, "help <CommandName>                          Show help on a particular command.\r\n");
-				transport->Send(p->playerId, "quit                                        Disconnects from the server.\r\n");
-				transport->Send(p->playerId, "[<ParserName>]   <Command> [<Parameters>]   Execute a command\r\n");
-				transport->Send(p->playerId, "[<ParserNumber>] <Command> [<Parameters>]   Execute a command\r\n");
-				ListParsers(p->playerId);
+				transport->Send(p->systemAddress, "\r\nINSTRUCTIONS:\r\n");
+				transport->Send(p->systemAddress, "Enter commands on your keyboard, using spaces to delineate parameters.\r\n");
+				transport->Send(p->systemAddress, "You can use quotation marks to toggle space delineation.\r\n");
+				transport->Send(p->systemAddress, "You can connect multiple times from the same computer.\r\n");
+				transport->Send(p->systemAddress, "You can direct commands to a parser by prefixing the parser name or number.\r\n");
+				transport->Send(p->systemAddress, "COMMANDS:\r\n");
+				transport->Send(p->systemAddress, "help                                        Show this display.\r\n");
+				transport->Send(p->systemAddress, "help <ParserName>                           Show help on a particular parser.\r\n");
+				transport->Send(p->systemAddress, "help <CommandName>                          Show help on a particular command.\r\n");
+				transport->Send(p->systemAddress, "quit                                        Disconnects from the server.\r\n");
+				transport->Send(p->systemAddress, "[<ParserName>]   <Command> [<Parameters>]   Execute a command\r\n");
+				transport->Send(p->systemAddress, "[<ParserNumber>] <Command> [<Parameters>]   Execute a command\r\n");
+				ListParsers(p->systemAddress);
+				//ShowPrompt(p->systemAddress);
 			}
 			else // numParameters == 2, including the help tag
 			{
@@ -144,10 +170,10 @@ void ConsoleServer::Update(void)
 					if (_stricmp(parameterList[1], commandParserList[i]->GetName())==0)
 					{
 						commandParsed=true;
-						commandParserList[i]->SendHelp(transport, p->playerId);
-						transport->Send(p->playerId, "COMMAND LIST:\r\n");
-						commandParserList[i]->SendCommandList(transport, p->playerId);
-						transport->Send(p->playerId, "\r\n");
+						commandParserList[i]->SendHelp(transport, p->systemAddress);
+						transport->Send(p->systemAddress, "COMMAND LIST:\r\n");
+						commandParserList[i]->SendCommandList(transport, p->systemAddress);
+						transport->Send(p->systemAddress, "\r\n");
 						break;
 					}
 				}
@@ -155,15 +181,15 @@ void ConsoleServer::Update(void)
 				if (commandParsed==false)
 				{
 					// Try again, for all commands for all parsers.
-					RegisteredCommand rc;
+					RakNet::RegisteredCommand rc;
 					for (i=0; i < commandParserList.Size(); i++)
 					{
 						if (commandParserList[i]->GetRegisteredCommand(parameterList[1], &rc))
 						{
-							if (rc.parameterCount==CommandParserInterface::VARIABLE_NUMBER_OF_PARAMETERS)
-								transport->Send(p->playerId, "(Variable parms): %s %s\r\n", rc.command, rc.commandHelp);
+							if (rc.parameterCount==RakNet::CommandParserInterface::VARIABLE_NUMBER_OF_PARAMETERS)
+								transport->Send(p->systemAddress, "(Variable parms): %s %s\r\n", rc.command, rc.commandHelp);
 							else
-								transport->Send(p->playerId, "(%i parms): %s %s\r\n", rc.parameterCount, rc.command, rc.commandHelp);
+								transport->Send(p->systemAddress, "(%i parms): %s %s\r\n", rc.parameterCount, rc.command, rc.commandHelp);
 							commandParsed=true;
 							break;
 						}
@@ -173,14 +199,15 @@ void ConsoleServer::Update(void)
 				if (commandParsed==false)
 				{
 					// Don't know what to do
-					transport->Send(p->playerId, "Unknown help topic: %s.\r\n", parameterList[1]);
+					transport->Send(p->systemAddress, "Unknown help topic: %s.\r\n", parameterList[1]);
 				}
+				//ShowPrompt(p->systemAddress);
 			}
 		}
 		else if (_stricmp(*parameterList, "quit")==0 && numParameters==1)
 		{
-			transport->Send(p->playerId, "Goodbye!");
-			transport->CloseConnection(p->playerId);
+			transport->Send(p->systemAddress, "Goodbye!\r\n");
+			transport->CloseConnection(p->systemAddress);
 		}
 		else
 		{
@@ -197,7 +224,7 @@ void ConsoleServer::Update(void)
 					commandParserIndex--; // Subtract 1 since we displayed numbers starting at index+1
 					if (commandParserIndex >= commandParserList.Size())
 					{
-						transport->Send(p->playerId, "Invalid index.\r\n");
+						transport->Send(p->systemAddress, "Invalid index.\r\n");
 						failed=true;
 					}
 				}
@@ -225,9 +252,9 @@ void ConsoleServer::Update(void)
 						{
 							commandParsed=true;
 							if (rc.parameterCount==CommandParserInterface::VARIABLE_NUMBER_OF_PARAMETERS || rc.parameterCount==numParameters-2)
-								commandParserList[commandParserIndex]->OnCommand(rc.command, numParameters-2, parameterList+2, transport, p->playerId, copy);
+								commandParserList[commandParserIndex]->OnCommand(rc.command, numParameters-2, parameterList+2, transport, p->systemAddress, copy);
 							else
-								transport->Send(p->playerId, "Invalid parameter count.\r\n(%i parms): %s %s\r\n", rc.parameterCount, rc.command, rc.commandHelp);
+								transport->Send(p->systemAddress, "Invalid parameter count.\r\n(%i parms): %s %s\r\n", rc.parameterCount, rc.command, rc.commandHelp);
 						}
 					}
 				}
@@ -244,30 +271,51 @@ void ConsoleServer::Update(void)
 						commandParsed=true;
 
 						if (rc.parameterCount==CommandParserInterface::VARIABLE_NUMBER_OF_PARAMETERS || rc.parameterCount==numParameters-1)
-							commandParserList[i]->OnCommand(rc.command, numParameters-1, parameterList+1, transport, p->playerId, copy);
+							commandParserList[i]->OnCommand(rc.command, numParameters-1, parameterList+1, transport, p->systemAddress, copy);
 						else
-							transport->Send(p->playerId, "Invalid parameter count.\r\n(%i parms): %s %s\r\n", rc.parameterCount, rc.command, rc.commandHelp);
+							transport->Send(p->systemAddress, "Invalid parameter count.\r\n(%i parms): %s %s\r\n", rc.parameterCount, rc.command, rc.commandHelp);
 					}
 				}
 			}
 			if (commandParsed==false && commandParserList.Size() > 0)
 			{
-				transport->Send(p->playerId, "Unknown command:  Type 'help' for help.\r\n");
+				transport->Send(p->systemAddress, "Unknown command:  Type 'help' for help.\r\n");
 			}
+
 		}
 
+		ShowPrompt(p->systemAddress);
 
 		transport->DeallocatePacket(p);
 		p = transport->Receive();
 	}
 }
 
-void ConsoleServer::ListParsers(PlayerID playerId)
+void ConsoleServer::ListParsers(SystemAddress systemAddress)
 {
-	transport->Send(playerId,"INSTALLED PARSERS:\r\n");
+	transport->Send(systemAddress,"INSTALLED PARSERS:\r\n");
 	unsigned i;
 	for (i=0; i < commandParserList.Size(); i++)
 	{
-        transport->Send(playerId, "%i. %s\r\n", i+1, commandParserList[i]->GetName());
+        transport->Send(systemAddress, "%i. %s\r\n", i+1, commandParserList[i]->GetName());
 	}
 }
+void ConsoleServer::ShowPrompt(SystemAddress systemAddress)
+{
+	 transport->Send(systemAddress, prompt);
+}
+void ConsoleServer::SetPrompt(const char *_prompt)
+{
+	if (prompt)
+		rakFree_Ex(prompt,_FILE_AND_LINE_);
+	if (_prompt && _prompt[0])
+	{
+		size_t len = strlen(_prompt);
+		prompt = (char*) rakMalloc_Ex(len+1,_FILE_AND_LINE_);
+		strcpy(prompt,_prompt);
+	}
+	else
+		prompt=0;
+}
+
+#endif // _RAKNET_SUPPORT_*
