@@ -1,23 +1,52 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 #ifndef __TABLE_SERIALIZER_H
 #define __TABLE_SERIALIZER_H
 
+#include "RakMemoryOverride.h"
 #include "DS_Table.h"
+#include "Export.h"
 
 namespace RakNet
 {
 	class BitStream;
 }
 
-class TableSerializer
+namespace RakNet
+{
+
+class RAK_DLL_EXPORT TableSerializer
 {
 public:
 	static void SerializeTable(DataStructures::Table *in, RakNet::BitStream *out);
-	static bool DeserializeTable(unsigned char *serializedTable, unsigned int tableLength, DataStructures::Table *out);
-	static void SerializeRow(DataStructures::Table::Row *in, unsigned keyIn, DataStructures::List<DataStructures::Table::ColumnDescriptor> &columns, RakNet::BitStream *out);
+	static bool DeserializeTable(unsigned char *serializedTable, unsigned int dataLength, DataStructures::Table *out);
+	static bool DeserializeTable(RakNet::BitStream *in, DataStructures::Table *out);
+	static void SerializeColumns(DataStructures::Table *in, RakNet::BitStream *out);
+	static void SerializeColumns(DataStructures::Table *in, RakNet::BitStream *out, DataStructures::List<int> &skipColumnIndices);
+	static bool DeserializeColumns(RakNet::BitStream *in, DataStructures::Table *out);	
+	static void SerializeRow(DataStructures::Table::Row *in, unsigned keyIn, const DataStructures::List<DataStructures::Table::ColumnDescriptor> &columns, RakNet::BitStream *out);
+	static void SerializeRow(DataStructures::Table::Row *in, unsigned keyIn, const DataStructures::List<DataStructures::Table::ColumnDescriptor> &columns, RakNet::BitStream *out, DataStructures::List<int> &skipColumnIndices);
 	static bool DeserializeRow(RakNet::BitStream *in, DataStructures::Table *out);
 	static void SerializeCell(RakNet::BitStream *out, DataStructures::Table::Cell *cell, DataStructures::Table::ColumnType columnType);
 	static bool DeserializeCell(RakNet::BitStream *in, DataStructures::Table::Cell *cell, DataStructures::Table::ColumnType columnType);
+	static void SerializeFilterQuery(RakNet::BitStream *in, DataStructures::Table::FilterQuery *query);
+	// Note that this allocates query->cell->c!
+	static bool DeserializeFilterQuery(RakNet::BitStream *out, DataStructures::Table::FilterQuery *query);
+	static void SerializeFilterQueryList(RakNet::BitStream *in, DataStructures::Table::FilterQuery *query, unsigned int numQueries, unsigned int maxQueries);
+	// Note that this allocates queries, cells, and query->cell->c!. Use DeallocateQueryList to free.
+	static bool DeserializeFilterQueryList(RakNet::BitStream *out, DataStructures::Table::FilterQuery **query, unsigned int *numQueries, unsigned int maxQueries, int allocateExtraQueries=0);
+	static void DeallocateQueryList(DataStructures::Table::FilterQuery *query, unsigned int numQueries);
 };
+
+} // namespace RakNet
 
 #endif
 
@@ -41,9 +70,9 @@ void main(void)
 	table.AddColumn("Score", DataStructures::Table::NUMERIC);
 	table.AddColumn("Players", DataStructures::Table::NUMERIC);
 	table.AddColumn("Empty Test Column", DataStructures::Table::STRING);
-	assert(table.GetColumnCount()==5);
+	RakAssert(table.GetColumnCount()==5);
 	row=table.AddRow(0);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Kevin Jenkins");
 	row->UpdateCell(1,sizeof(dummydata), (char*)&dummydata);
 	row->UpdateCell(2,5);
@@ -63,7 +92,7 @@ void main(void)
 	row->UpdateCell(3,20);
 
 	row=table.AddRow(3);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Kevin Jenkins");
 	row->UpdateCell(1,sizeof(dummydata), (char*)&dummydata);
 	row->UpdateCell(2,15);
@@ -71,7 +100,7 @@ void main(void)
 	row->UpdateCell(4,"col index 4");
 
 	row=table.AddRow(4);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Kevin Jenkins");
 	row->UpdateCell(1,sizeof(dummydata), (char*)&dummydata);
 	//row->UpdateCell(2,25);
@@ -79,7 +108,7 @@ void main(void)
 	//row->UpdateCell(4,"should be unique");
 
 	row=table.AddRow(5);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Kevin Jenkins");
 	row->UpdateCell(1,sizeof(dummydata), (char*)&dummydata);
 	//row->UpdateCell(2,25);
@@ -87,7 +116,7 @@ void main(void)
 	//row->UpdateCell(4,"should be unique");
 
 	row=table.AddRow(6);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Kevin Jenkins");
 	row->UpdateCell(1,sizeof(dummydata), (char*)&dummydata);
 	row->UpdateCell(2,35);
@@ -95,11 +124,11 @@ void main(void)
 	//row->UpdateCell(4,"should be unique");
 
 	row=table.AddRow(7);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Bob Jenkins");
 
 	row=table.AddRow(8);
-	assert(row);
+	RakAssert(row);
 	row->UpdateCell(0,"Zack Jenkins");
 
 	// Test multi-column sorting
@@ -116,11 +145,11 @@ void main(void)
 	table.SortTable(queries, 4, rows);
 	unsigned i;
 	char out[256];
-	printf("Sort: Ascending except for column index 3\n");
+	RAKNET_DEBUG_PRINTF("Sort: Ascending except for column index 3\n");
 	for (i=0; i < table.GetRowCount(); i++)
 	{
 		table.PrintRow(out,256,',',true, rows[i]);
-		printf("%s\n", out);
+		RAKNET_DEBUG_PRINTF("%s\n", out);
 	}
 
 	// Test query:
@@ -132,11 +161,11 @@ void main(void)
 	columnsToReturn[3]=4;
 	DataStructures::Table resultsTable;
 	table.QueryTable(columnsToReturn,4,0,0,&resultsTable);
-	printf("Query: Don't return column 3, and swap columns 0 and 2:\n");
+	RAKNET_DEBUG_PRINTF("Query: Don't return column 3, and swap columns 0 and 2:\n");
 	for (i=0; i < resultsTable.GetRowCount(); i++)
 	{
 		resultsTable.PrintRow(out,256,',',true, resultsTable.GetRowByIndex(i));
-		printf("%s\n", out);
+		RAKNET_DEBUG_PRINTF("%s\n", out);
 	}
 
 	// Test filter:
@@ -146,11 +175,11 @@ void main(void)
 	inclusionFilters[0].operation=DataStructures::Table::QF_IS_EMPTY;
 	// inclusionFilters[0].cellValue; // Unused for IS_EMPTY
 	table.QueryTable(0,0,inclusionFilters,1,&resultsTable);
-	printf("Filter: Only return rows with column index 4 empty:\n");
+	RAKNET_DEBUG_PRINTF("Filter: Only return rows with column index 4 empty:\n");
 	for (i=0; i < resultsTable.GetRowCount(); i++)
 	{
 		resultsTable.PrintRow(out,256,',',true, resultsTable.GetRowByIndex(i));
-		printf("%s\n", out);
+		RAKNET_DEBUG_PRINTF("%s\n", out);
 	}
 
 	// Column 5 empty and column 0 == Kevin Jenkins
@@ -160,29 +189,29 @@ void main(void)
 	inclusionFilters[1].operation=DataStructures::Table::QF_EQUAL;
 	inclusionFilters[1].cellValue.Set("Kevin Jenkins");
 	table.QueryTable(0,0,inclusionFilters,2,&resultsTable);
-	printf("Filter: Column 5 empty and column 0 == Kevin Jenkins:\n");
+	RAKNET_DEBUG_PRINTF("Filter: Column 5 empty and column 0 == Kevin Jenkins:\n");
 	for (i=0; i < resultsTable.GetRowCount(); i++)
 	{
 		resultsTable.PrintRow(out,256,',',true, resultsTable.GetRowByIndex(i));
-		printf("%s\n", out);
+		RAKNET_DEBUG_PRINTF("%s\n", out);
 	}
 
 	RakNet::BitStream bs;
-	printf("PreSerialize:\n");
+	RAKNET_DEBUG_PRINTF("PreSerialize:\n");
 	for (i=0; i < table.GetRowCount(); i++)
 	{
 		table.PrintRow(out,256,',',true, table.GetRowByIndex(i));
-		printf("%s\n", out);
+		RAKNET_DEBUG_PRINTF("%s\n", out);
 	}
 	StringCompressor::AddReference();
 	TableSerializer::Serialize(&table, &bs);
 	TableSerializer::Deserialize(&bs, &table);
 	StringCompressor::RemoveReference();
-	printf("PostDeserialize:\n");
+	RAKNET_DEBUG_PRINTF("PostDeserialize:\n");
 	for (i=0; i < table.GetRowCount(); i++)
 	{
 		table.PrintRow(out,256,',',true, table.GetRowByIndex(i));
-		printf("%s\n", out);
+		RAKNET_DEBUG_PRINTF("%s\n", out);
 	}
 	int a=5;
 }

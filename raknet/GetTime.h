@@ -1,54 +1,42 @@
-/// \file
-/// \brief Returns the value from QueryPerformanceCounter.  This is the function RakNet uses to represent time.
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
+/// \file GetTime.h
+/// \brief Returns the value from QueryPerformanceCounter.  This is the function RakNet uses to represent time. This time won't match the time returned by GetTimeCount(). See http://www.jenkinssoftware.com/forum/index.php?topic=2798.0
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
 
 #ifndef __GET_TIME_H
 #define __GET_TIME_H
 
-#include "RakNetDefines.h"
 #include "Export.h"
+#include "RakNetTime.h" // For RakNet::TimeMS
 
-#include <stdint.h>
-
-/// The namespace RakNet is not consistently used.  It's only purpose is to avoid compiler errors for classes whose names are very common.
-/// For the most part I've tried to avoid this simply by using names very likely to be unique for my classes.
 namespace RakNet
 {
-	// Define __GET_TIME_64BIT if you want to use large types for GetTime (takes more bandwidth when you transmit time though!)
-	// You would want to do this if your system is going to run long enough to overflow the millisecond counter (over a month)
-#if __GET_TIME_64BIT==1
-	typedef uint64_t Time;
-	typedef uint32_t Time32;
-	typedef uint64_t Time64;
-#else
-	typedef uint32_t Time;
-	typedef uint32_t Time32;
-	typedef uint64_t Time64;
-#endif
+	/// Same as GetTimeMS
+	/// Holds the time in either a 32 or 64 bit variable, depending on __GET_TIME_64BIT
+	RakNet::Time RAK_DLL_EXPORT GetTime( void );
 
-#ifdef RAKNET_TIME_EXPERIMENT
-	typedef Time64 TimeExp;
-#else
-	typedef Time TimeExp;
-#endif
+	/// Return the time as 32 bit
+	/// \note The maximum delta between returned calls is 1 second - however, RakNet calls this constantly anyway. See NormalizeTime() in the cpp.
+	RakNet::TimeMS RAK_DLL_EXPORT GetTimeMS( void );
+	
+	/// Return the time as 64 bit
+	/// \note The maximum delta between returned calls is 1 second - however, RakNet calls this constantly anyway. See NormalizeTime() in the cpp.
+	RakNet::TimeUS RAK_DLL_EXPORT GetTimeUS( void );
 
-	/// Returns the value from QueryPerformanceCounter.  This is the function RakNet uses to represent time.
-	Time RAK_DLL_EXPORT GetTime(void);
-	Time32 RAK_DLL_EXPORT GetTime32(void);
-	Time64 RAK_DLL_EXPORT GetTime64(void);
+	/// a > b?
+	extern RAK_DLL_EXPORT bool GreaterThan(RakNet::Time a, RakNet::Time b);
+	/// a < b?
+	extern RAK_DLL_EXPORT bool LessThan(RakNet::Time a, RakNet::Time b);
 }
 
 #endif

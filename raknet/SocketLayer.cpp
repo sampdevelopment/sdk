@@ -1,595 +1,610 @@
-/**
-* @file
-* @brief SocketLayer class implementation 
-*
- * This file is part of RakNet Copyright 2003 Rakkarsoft LLC and Kevin Jenkins.
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
  *
- * Usage of Raknet is subject to the appropriate licence agreement.
- * "Shareware" Licensees with Rakkarsoft LLC are subject to the
- * shareware license found at
- * http://www.rakkarsoft.com/shareWareLicense.html which you agreed to
- * upon purchase of a "Shareware license" "Commercial" Licensees with
- * Rakkarsoft LLC are subject to the commercial license found at
- * http://www.rakkarsoft.com/sourceCodeLicense.html which you agreed
- * to upon purchase of a "Commercial license"
- * Custom license users are subject to the terms therein.
- * All other users are
- * subject to the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
  *
- * Refer to the appropriate license agreement for distribution,
- * modification, and warranty rights.
-*/
+ */
+
+/// \file
+/// \brief SocketLayer class implementation
+///
+
+
 #include "SocketLayer.h"
-#include "PacketEnumerations.h"
+#include "RakAssert.h"
+#include "RakNetTypes.h"
+#include "RakPeer.h"
+#include "GetTime.h"
+#include "LinuxStrings.h"
+#include "SocketDefines.h"
+#if (defined(__GNUC__)  || defined(__GCCXML__)) && !defined(__WIN32__)
+#include <netdb.h>
+#endif
 
-#include <assert.h>
-#include "MTUSize.h"
+using namespace RakNet;
 
-#include "SAMPCipher.h"
-char szDestBuffer[MAXIMUM_MTU_SIZE + 1];
+/*
+#if defined(__native_client__)
+using namespace pp;
+#endif
+*/
+
+#if USE_SLIDING_WINDOW_CONGESTION_CONTROL!=1
+#include "CCRakNetUDT.h"
+#else
+#include "CCRakNetSlidingWindow.h"
+#endif
+
+//SocketLayerOverride *SocketLayer::slo=0;
 
 #ifdef _WIN32
-#include <process.h>
-#define COMPATIBILITY_2_RECV_FROM_FLAGS 0
-typedef int socklen_t;
-#elif defined(_COMPATIBILITY_2)
-#include "Compatibility2Includes.h"
 #else
-#define COMPATIBILITY_2_RECV_FROM_FLAGS 0
 #include <string.h> // memcpy
 #include <unistd.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
+#include <errno.h>  // error numbers
+#include <stdio.h> // RAKNET_DEBUG_PRINTF
+#if !defined(ANDROID)
+#include <ifaddrs.h>
 #endif
+#include <netinet/in.h>
+#include <net/if.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+#if   defined(_WIN32)
+#include "WSAStartupSingleton.h"
+#include "WindowsIncludes.h"
+
+#else
+#include <unistd.h>
+#endif
+
+#include "RakSleep.h"
+#include <stdio.h>
+#include "Itoa.h"
 
 #ifdef _MSC_VER
 #pragma warning( push )
 #endif
 
-bool SocketLayer::socketLayerStarted = false;
-#ifdef _WIN32
-WSADATA SocketLayer::winsockInfo;
-#endif
-SocketLayer SocketLayer::I;
-
-#ifdef _WIN32
-extern void __stdcall ProcessNetworkPacket( const unsigned int binaryAddress, const unsigned short port, const char *data, const int length, RakPeer *rakPeer );
-#else
-extern void ProcessNetworkPacket( const unsigned int binaryAddress, const unsigned short port, const char *data, const int length, RakPeer *rakPeer );
-#endif
-
-#ifdef _WIN32
-extern void __stdcall ProcessPortUnreachable( const unsigned int binaryAddress, const unsigned short port, RakPeer *rakPeer );
-#else
-extern void ProcessPortUnreachable( const unsigned int binaryAddress, const unsigned short port, RakPeer *rakPeer );
-#endif
+namespace RakNet
+{
+	extern void ProcessNetworkPacket( const SystemAddress systemAddress, const char *data, const int length, RakPeer *rakPeer, RakNet::TimeUS timeRead );
+	//extern void ProcessNetworkPacket( const SystemAddress systemAddress, const char *data, const int length, RakPeer *rakPeer, RakNetSocket* rakNetSocket, RakNet::TimeUS timeRead );
+}
 
 #ifdef _DEBUG
 #include <stdio.h>
 #endif
 
-SocketLayer::SocketLayer()
+ 
+
+// http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#ip4to6
+// http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#getaddrinfo
+
+#if RAKNET_SUPPORT_IPV6==1
+void PrepareAddrInfoHints(addrinfo *hints)
 {
-	if ( socketLayerStarted == false )
-	{
-#ifdef _WIN32
-
-		if ( WSAStartup( MAKEWORD( 2, 2 ), &winsockInfo ) != 0 )
-		{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-			DWORD dwIOError = GetLastError();
-			/*LPVOID messageBuffer;
-			FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-				NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-				( LPTSTR ) & messageBuffer, 0, NULL );*/
-			// something has gone wrong here...
-			printf( "WSAStartup failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-			//Free the buffer.
-			//LocalFree( messageBuffer );
-#endif
-		}
-
-#endif
-		socketLayerStarted = true;
-	}
+	memset(hints, 0, sizeof (addrinfo)); // make sure the struct is empty
+	hints->ai_socktype = SOCK_DGRAM; // UDP sockets
+	hints->ai_flags = AI_PASSIVE;     // fill in my IP for me
 }
-
-SocketLayer::~SocketLayer()
+#endif
+ 
+void SocketLayer::SetSocketOptions( __UDPSOCKET__ listenSocket, bool blockingSocket, bool setBroadcast)
 {
-	if ( socketLayerStarted == true )
-	{
-#ifdef _WIN32
-		WSACleanup();
-#endif
-
-		socketLayerStarted = false;
-	}
-}
-
-SOCKET SocketLayer::Connect( SOCKET writeSocket, unsigned int binaryAddress, unsigned short port )
-{
-	assert( writeSocket != INVALID_SOCKET );
-	sockaddr_in connectSocketAddress;
-
-	connectSocketAddress.sin_family = AF_INET;
-	connectSocketAddress.sin_port = htons( port );
-	connectSocketAddress.sin_addr.s_addr = binaryAddress;
-
-	if ( connect( writeSocket, ( struct sockaddr * ) & connectSocketAddress, sizeof( struct sockaddr ) ) != 0 )
-	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) &messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "WSAConnect failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-	}
-
-	return writeSocket;
-}
-
-#ifdef _MSC_VER
-#pragma warning( disable : 4100 ) // warning C4100: <variable name> : unreferenced formal parameter
-#endif
-SOCKET SocketLayer::CreateBoundSocket( unsigned short port, bool blockingSocket, const char *forceHostAddress )
-{
-	SOCKET listenSocket;
-	sockaddr_in listenerSocketAddress;
-	int ret;
-
-	listenSocket = socket( AF_INET, SOCK_DGRAM, 0 );
-
-	if ( listenSocket == INVALID_SOCKET )
-	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "socket(...) failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-
-		return INVALID_SOCKET;
-	}
-
+#ifdef __native_client__
+	(void) listenSocket;
+#else
 	int sock_opt = 1;
-
-	if ( setsockopt( listenSocket, SOL_SOCKET, SO_REUSEADDR, ( char * ) & sock_opt, sizeof ( sock_opt ) ) == -1 )
-	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "setsockopt(SO_REUSEADDR) failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-	}
 
 	// This doubles the max throughput rate
 	sock_opt=1024*256;
-	setsockopt(listenSocket, SOL_SOCKET, SO_RCVBUF, ( char * ) & sock_opt, sizeof ( sock_opt ) );
-	
+	setsockopt__(listenSocket, SOL_SOCKET, SO_RCVBUF, ( char * ) & sock_opt, sizeof ( sock_opt ) );
+
+	// Immediate hard close. Don't linger the socket, or recreating the socket quickly on Vista fails.
+	// Fail with voice and xbox
+
+	sock_opt=0;
+	setsockopt__(listenSocket, SOL_SOCKET, SO_LINGER, ( char * ) & sock_opt, sizeof ( sock_opt ) );
+
+
+
 	// This doesn't make much difference: 10% maybe
+	// Not supported on console 2
 	sock_opt=1024*16;
-	setsockopt(listenSocket, SOL_SOCKET, SO_SNDBUF, ( char * ) & sock_opt, sizeof ( sock_opt ) );
+	setsockopt__(listenSocket, SOL_SOCKET, SO_SNDBUF, ( char * ) & sock_opt, sizeof ( sock_opt ) );
 
-	#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-	// If this assert hit you improperly linked against WSock32.h
-	assert(IP_DONTFRAGMENT==14);
-	#endif
 
-	// TODO - I need someone on dialup to test this with :(
-	// Path MTU Detection
-	/*
-	if ( setsockopt( listenSocket, IPPROTO_IP, IP_DONTFRAGMENT, ( char * ) & sock_opt, sizeof ( sock_opt ) ) == -1 )
+	if (blockingSocket==false)
 	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
+#ifdef _WIN32
+		unsigned long nonblocking = 1;
+		ioctlsocket__(listenSocket, FIONBIO, &nonblocking );
+
+
+
+#else
+		fcntl( listenSocket, F_SETFL, O_NONBLOCK );
+#endif
+	}
+	if (setBroadcast)
+	{
+		// Note: Fails with VDP but not xbox
+		// Set broadcast capable
+		sock_opt=1;
+		if ( setsockopt__(listenSocket, SOL_SOCKET, SO_BROADCAST, ( char * ) & sock_opt, sizeof( sock_opt ) ) == -1 )
+		{
+#if defined(_WIN32) && defined(_DEBUG)
+#if  !defined(WINDOWS_PHONE_8)
+			DWORD dwIOError = GetLastError();
+			// On Vista, can get WSAEACCESS (10013)
+			// See http://support.microsoft.com/kb/819124
+			// http://blogs.msdn.com/wndp/archive/2007/03/19/winsock-so-exclusiveaddruse-on-vista.aspx
+			// http://msdn.microsoft.com/en-us/library/ms740621(VS.85).aspx
+			LPVOID messageBuffer;
+			FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+				NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
+				( LPTSTR ) & messageBuffer, 0, NULL );
+			// something has gone wrong here...
+			RAKNET_DEBUG_PRINTF( "setsockopt__(SO_BROADCAST) failed:Error code - %d\n%s", dwIOError, messageBuffer );
+			//Free the buffer.
+			LocalFree( messageBuffer );
+#endif
+#endif
+
+		}
+
+	}
+
+#endif
+}
+ 
+
+RakNet::RakString SocketLayer::GetSubNetForSocketAndIp(__UDPSOCKET__ inSock, RakNet::RakString inIpString)
+{
+	RakNet::RakString netMaskString;
+	RakNet::RakString ipString;
+
+
+
+
+
+#if   defined(WINDOWS_STORE_RT)
+	RakAssert("Not yet supported" && 0);
+	return "";
+#elif defined(_WIN32)
+	INTERFACE_INFO InterfaceList[20];
+	unsigned long nBytesReturned;
+	if (WSAIoctl(inSock, SIO_GET_INTERFACE_LIST, 0, 0, &InterfaceList,
+		sizeof(InterfaceList), &nBytesReturned, 0, 0) == SOCKET_ERROR) {
+			return "";
+	}
+
+	int nNumInterfaces = nBytesReturned / sizeof(INTERFACE_INFO);
+
+	for (int i = 0; i < nNumInterfaces; ++i)
+	{
+		sockaddr_in *pAddress;
+		pAddress = (sockaddr_in *) & (InterfaceList[i].iiAddress);
+		ipString=inet_ntoa(pAddress->sin_addr);
+
+		if (inIpString==ipString)
+		{
+			pAddress = (sockaddr_in *) & (InterfaceList[i].iiNetmask);
+			netMaskString=inet_ntoa(pAddress->sin_addr);
+			return netMaskString;
+		}
+	}
+	return "";
+#else
+
+	int fd,fd2;
+	fd2 = socket__(AF_INET, SOCK_DGRAM, 0);
+
+	if(fd2 < 0)
+	{
+		return "";
+	}
+
+	struct ifconf ifc;
+	char          buf[1999];
+	ifc.ifc_len = sizeof(buf);
+	ifc.ifc_buf = buf;
+	if(ioctl(fd2, SIOCGIFCONF, &ifc) < 0)
+	{
+		return "";
+	}
+
+	struct ifreq *ifr;
+	ifr         = ifc.ifc_req;
+	int intNum = ifc.ifc_len / sizeof(struct ifreq);
+	for(int i = 0; i < intNum; i++)
+	{
+		ipString=inet_ntoa(((struct sockaddr_in *)&ifr[i].ifr_addr)->sin_addr);
+
+		if (inIpString==ipString)
+		{
+			struct ifreq ifr2;
+			fd = socket__(AF_INET, SOCK_DGRAM, 0);
+			if(fd < 0)
+			{
+				return "";
+			}
+			ifr2.ifr_addr.sa_family = AF_INET;
+
+			strncpy(ifr2.ifr_name, ifr[i].ifr_name, IFNAMSIZ-1);
+
+			ioctl(fd, SIOCGIFNETMASK, &ifr2);
+
+			close(fd);
+			close(fd2);
+			netMaskString=inet_ntoa(((struct sockaddr_in *)&ifr2.ifr_addr)->sin_addr);
+
+			return netMaskString;
+		}
+	}
+
+	close(fd2);
+	return "";
+
+#endif
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#if   defined(WINDOWS_STORE_RT)
+void GetMyIP_WinRT( SystemAddress addresses[MAXIMUM_NUMBER_OF_INTERNAL_IDS] )
+{
+	// Perhaps DatagramSocket.BindEndpointAsynch, use localHostName as an empty string, then query what it bound to?
+	RakAssert("Not yet supported" && 0);
+}
+#else
+void GetMyIP_Win32( SystemAddress addresses[MAXIMUM_NUMBER_OF_INTERNAL_IDS] )
+{
+	int idx=0;
+	idx=0;
+	char ac[ 80 ];
+	if ( gethostname( ac, sizeof( ac ) ) == -1 )
+	{
+ #if defined(_WIN32) && !defined(WINDOWS_PHONE_8)
 		DWORD dwIOError = GetLastError();
 		LPVOID messageBuffer;
 		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
 			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
 			( LPTSTR ) & messageBuffer, 0, NULL );
 		// something has gone wrong here...
-		printf( "setsockopt(IP_DONTFRAGMENT) failed:Error code - %d\n%s", dwIOError, messageBuffer );
+		RAKNET_DEBUG_PRINTF( "gethostname failed:Error code - %d\n%s", dwIOError, messageBuffer );
 		//Free the buffer.
 		LocalFree( messageBuffer );
-#endif
-	}
-	*/
-
-#ifndef _COMPATIBILITY_2
-	//Set non-blocking
-#ifdef _WIN32
-	unsigned long nonblocking = 1;
-// http://www.die.net/doc/linux/man/man7/ip.7.html
-	if ( ioctlsocket( listenSocket, FIONBIO, &nonblocking ) != 0 )
-	{
-		assert( 0 );
-		return INVALID_SOCKET;
-	}
-#else
-	if ( fcntl( listenSocket, F_SETFL, O_NONBLOCK ) != 0 )
-	{
-		assert( 0 );
-		return INVALID_SOCKET;
-	}
-#endif
-#endif
-
-	// Set broadcast capable
-	if ( setsockopt( listenSocket, SOL_SOCKET, SO_BROADCAST, ( char * ) & sock_opt, sizeof( sock_opt ) ) == -1 )
-	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "setsockopt(SO_BROADCAST) failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-
-	}
-
-	// Listen on our designated Port#
-	listenerSocketAddress.sin_port = htons( port );
-
-	// Fill in the rest of the address structure
-	listenerSocketAddress.sin_family = AF_INET;
-
-	if (forceHostAddress && forceHostAddress[0])
-	{
-		listenerSocketAddress.sin_addr.s_addr = inet_addr( forceHostAddress );
-	}
-	else
-	{
-		listenerSocketAddress.sin_addr.s_addr = INADDR_ANY;
-	}	
-
-	// bind our name to the socket
-	ret = bind( listenSocket, ( struct sockaddr * ) & listenerSocketAddress, sizeof( struct sockaddr ) );
-
-	if ( ret == SOCKET_ERROR )
-	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "bind(...) failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-
-		return INVALID_SOCKET;
-	}
-
-	return listenSocket;
-}
-
-#if !defined(_COMPATIBILITY_1) && !defined(_COMPATIBILITY_2)
-const char* SocketLayer::DomainNameToIP( const char *domainName )
-{
-	struct hostent * phe = gethostbyname( domainName );
-
-	if ( phe == 0 || phe->h_addr_list[ 0 ] == 0 )
-	{
-		//cerr << "Yow! Bad host lookup." << endl;
-		return 0;
-	}
-
-	struct in_addr addr;
-
-	memcpy( &addr, phe->h_addr_list[ 0 ], sizeof( struct in_addr ) );
-
-	return inet_ntoa( addr );
-}
-#endif
-
-unsigned long _sendtoUncompressedTotal=0;
-unsigned long _sendtoCompressedTotal=0;
-
-// unused
-void SocketLayer::Write( const SOCKET writeSocket, const char* data, const int length )
-{
-#ifdef _DEBUG
-	assert( writeSocket != INVALID_SOCKET );
-#endif
-	_sendtoUncompressedTotal+=length;
-	_sendtoCompressedTotal+=length;
-	send( writeSocket, data, length, 0 );
-}
-
-#ifdef SAMPSRV
-	int ProcessQueryPacket(unsigned int binaryAddress, unsigned short port, char *data, int length, SOCKET s);
-#endif
-
-//unsigned long _recvfromUncompressedTotal=0;
-//unsigned long _recvfromCompressedTotal=0;
-
-int SocketLayer::RecvFrom( const SOCKET s, RakPeer *rakPeer, int *errorCode )
-{
-	int len;
-	char data[ MAXIMUM_MTU_SIZE ];
-	sockaddr_in sa;
-
-	const socklen_t len2 = sizeof( struct sockaddr_in );
-	sa.sin_family = AF_INET;
-
-#ifdef _DEBUG
-	data[ 0 ] = 0;
-	len = 0;
-	sa.sin_addr.s_addr = 0;
-#endif
-
-	if ( s == INVALID_SOCKET )
-	{
-		*errorCode = SOCKET_ERROR;
-		return SOCKET_ERROR;
-	}
-
-	len = recvfrom( s, data, MAXIMUM_MTU_SIZE, COMPATIBILITY_2_RECV_FROM_FLAGS, ( sockaddr* ) & sa, ( socklen_t* ) & len2 );
-
-	// if (len>0)
-	//  printf("Got packet on port %i\n",ntohs(sa.sin_port));
-
-	/*
-	if ( len == 0 )
-	{
-#ifdef _DEBUG
-		printf( "Error: recvfrom returned 0 on a connectionless blocking call\non port %i.  This is a bug with Zone Alarm.  Please turn off Zone Alarm.\n", ntohs( sa.sin_port ) );
-		assert( 0 );
-#endif
-
-		//*errorCode = SOCKET_ERROR;
-		*errorCode = 0;
-		return SOCKET_ERROR;
-	}*/
-
-	if ( len != SOCKET_ERROR )
-	{
-		unsigned short portnum;
-		portnum = ntohs( sa.sin_port );
-		//strcpy(ip, inet_ntoa(sa.sin_addr));
-		//if (strcmp(ip, "0.0.0.0")==0)
-		// strcpy(ip, "127.0.0.1");
-
-		if (len > 0)
-		{
-
-#ifdef SAMPSRV
-			// QUERY PACKETS ARE NOT COMPRESSED
-			//logprintf("Raw ID: %c:%u",data[0],data[0]);
-
-			if(ProcessQueryPacket(sa.sin_addr.s_addr, portnum,(char*)data, len, s)) {
-				*errorCode = 0;
-				return 1;
-			}
-#endif
-
-		//----------------------------------------------
-		// Kye Added: Zlib in socketlayer headend.
-#ifdef SAMPSRV
-			if (!DecryptData(szDestBuffer, data, &len))
-			{
-				*errorCode = 0;
-				return 1;
-			}
-
-			//_recvfromCompressedTotal+=len;
-			//_recvfromUncompressedTotal+=destLen;
-
-			ProcessNetworkPacket( sa.sin_addr.s_addr, portnum, szDestBuffer, len, rakPeer );
-#else
-			ProcessNetworkPacket( sa.sin_addr.s_addr, portnum, data, len, rakPeer );  
-#endif
-		}
-		return 1;
-	}
-	else
-	{
-		*errorCode = 0;
-
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-
-		DWORD dwIOError = WSAGetLastError();
-
-		if ( dwIOError == WSAEWOULDBLOCK )
-		{
-			return SOCKET_ERROR;
-		}
-		if ( dwIOError == WSAECONNRESET )
-		{
-#if defined(_DEBUG)
-//			printf( "A previous send operation resulted in an ICMP Port Unreachable message.\n" );
-#endif
-
-
-			unsigned short portnum=0;
-			ProcessPortUnreachable(sa.sin_addr.s_addr, portnum, rakPeer);
-			// *errorCode = dwIOError;
-			return SOCKET_ERROR;
-		}
-		else
-		{
-#if defined(_DEBUG)
-			if ( dwIOError != WSAEINTR )
-			{
-				/*LPVOID messageBuffer;
-				FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-					NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-					( LPTSTR ) & messageBuffer, 0, NULL );*/
-				// something has gone wrong here...
-				printf( "recvfrom failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-
-				//Free the buffer.
-				//LocalFree( messageBuffer );
-			}
-#endif
-		}
-#endif
-	}
-
-	return 0; // no data
-}
-
-#ifdef _MSC_VER
-#pragma warning( disable : 4702 ) // warning C4702: unreachable code
-#endif
-
-int SocketLayer::SendTo( SOCKET s, const char *data, int length, unsigned int binaryAddress, unsigned short port )
-{
-	if ( s == INVALID_SOCKET )
-	{
-		return -1;
-	}
-
-	int len;
-	sockaddr_in sa;
-	sa.sin_port = htons( port );
-	sa.sin_addr.s_addr = binaryAddress;
-	sa.sin_family = AF_INET;
-
-//----------------------------------------------
-// Kye Added: Zlib in socketlayer headend. (client sends compressed)
-
-#ifndef SAMPSRV
-	EncryptData(szDestBuffer, (char*)data, &length);
-
-	_sendtoUncompressedTotal+=length;
-	_sendtoCompressedTotal+=length;
-#endif
-
-	do {
-#ifndef SAMPSRV
-		len = sendto( s, szDestBuffer, length, 0, ( const sockaddr* ) & sa, sizeof( struct sockaddr_in ) );
-#else
-		len = sendto( s, data, length, 0, ( const sockaddr* ) & sa, sizeof( struct sockaddr_in ) );
-#endif
-	} while ( len == 0 );
-
-	if ( len != SOCKET_ERROR )
-		return 0;
-
-#if defined(_WIN32)
-
-	DWORD dwIOError = WSAGetLastError();
-
-	if ( dwIOError == WSAECONNRESET )
-	{
-#if defined(_DEBUG)
-		printf( "A previous send operation resulted in an ICMP Port Unreachable message.\n" );
-#endif
-
-	}
-	else if ( dwIOError != WSAEWOULDBLOCK )
-	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "sendto failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-
-	}
-
-	return dwIOError;
-#endif
-
-	return 1; // error
-}
-
-int SocketLayer::SendTo( SOCKET s, const char *data, int length, char ip[ 16 ], unsigned short port )
-{
-	unsigned int binaryAddress;
-	binaryAddress = inet_addr( ip );
-	return SendTo( s, data, length, binaryAddress, port );
-}
-
-#if !defined(_COMPATIBILITY_1) && !defined(_COMPATIBILITY_2)
-void SocketLayer::GetMyIP( char ipList[ 10 ][ 16 ] )
-{
-	char ac[ 80 ];
-
-	if ( gethostname( ac, sizeof( ac ) ) == SOCKET_ERROR )
-	{
-	#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
-		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
-		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
-		// something has gone wrong here...
-		printf( "gethostname failed:Error code - %d", dwIOError /*, messageBuffer*/ );
-		//Free the buffer.
-		//LocalFree( messageBuffer );
-	#endif
-
+		#endif
 		return ;
 	}
 
+
+#if RAKNET_SUPPORT_IPV6==1
+	struct addrinfo hints;
+	struct addrinfo *servinfo=0, *aip;  // will point to the results
+	PrepareAddrInfoHints(&hints);
+	getaddrinfo(ac, "", &hints, &servinfo);
+
+	for (idx=0, aip = servinfo; aip != NULL && idx < MAXIMUM_NUMBER_OF_INTERNAL_IDS; aip = aip->ai_next, idx++)
+	{
+		if (aip->ai_family == AF_INET)
+		{
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)aip->ai_addr;
+			memcpy(&addresses[idx].address.addr4,ipv4,sizeof(sockaddr_in));
+		}
+		else
+		{
+			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)aip->ai_addr;
+			memcpy(&addresses[idx].address.addr4,ipv6,sizeof(sockaddr_in6));
+		}
+
+	}
+
+	freeaddrinfo(servinfo); // free the linked-list
+#else
 	struct hostent *phe = gethostbyname( ac );
 
 	if ( phe == 0 )
 	{
-#if defined(_WIN32) && !defined(_COMPATIBILITY_1) && defined(_DEBUG)
+ #if defined(_WIN32) && !defined(WINDOWS_PHONE_8)
 		DWORD dwIOError = GetLastError();
-		/*LPVOID messageBuffer;
+		LPVOID messageBuffer;
 		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
 			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
-			( LPTSTR ) & messageBuffer, 0, NULL );*/
+			( LPTSTR ) & messageBuffer, 0, NULL );
 		// something has gone wrong here...
-		printf( "gethostbyname failed:Error code - %d", dwIOError /*, messageBuffer*/ );
+		RAKNET_DEBUG_PRINTF( "gethostbyname failed:Error code - %d\n%s", dwIOError, messageBuffer );
 
 		//Free the buffer.
-		//LocalFree( messageBuffer );
-#endif
-
+		LocalFree( messageBuffer );
+	#endif
 		return ;
 	}
-
-	for ( int i = 0; phe->h_addr_list[ i ] != 0 && i < 10; ++i )
+	for ( idx = 0; idx < MAXIMUM_NUMBER_OF_INTERNAL_IDS; ++idx )
 	{
+		if (phe->h_addr_list[ idx ] == 0)
+			break;
 
-		struct in_addr addr;
+		memcpy(&addresses[idx].address.addr4.sin_addr,phe->h_addr_list[ idx ],sizeof(struct in_addr));
 
-		memcpy( &addr, phe->h_addr_list[ i ], sizeof( struct in_addr ) );
-		//cout << "Address " << i << ": " << inet_ntoa(addr) << endl;
-		strcpy( ipList[ i ], inet_ntoa( addr ) );
+	}
+#endif // else RAKNET_SUPPORT_IPV6==1
+
+	while (idx < MAXIMUM_NUMBER_OF_INTERNAL_IDS)
+	{
+		addresses[idx]=UNASSIGNED_SYSTEM_ADDRESS;
+		idx++;
 	}
 }
+
 #endif
 
-unsigned short SocketLayer::GetLocalPort ( SOCKET s )
+
+void SocketLayer::GetMyIP( SystemAddress addresses[MAXIMUM_NUMBER_OF_INTERNAL_IDS] )
 {
+
+
+
+
+
+
+#if   defined(WINDOWS_STORE_RT)
+	GetMyIP_WinRT(addresses);
+#elif defined(_WIN32)
+	GetMyIP_Win32(addresses);
+#else
+//	GetMyIP_Linux(addresses);
+	GetMyIP_Win32(addresses);
+#endif
+}
+
+
+/*
+unsigned short SocketLayer::GetLocalPort(RakNetSocket *s)
+{
+	SystemAddress sa;
+	GetSystemAddress(s,&sa);
+	return sa.GetPort();
+}
+*/
+unsigned short SocketLayer::GetLocalPort(__UDPSOCKET__ s)
+{
+	SystemAddress sa;
+	GetSystemAddress(s,&sa);
+	return sa.GetPort();
+}
+void SocketLayer::GetSystemAddress_Old ( __UDPSOCKET__ s, SystemAddress *systemAddressOut )
+{
+#if defined(__native_client__)
+	*systemAddressOut = UNASSIGNED_SYSTEM_ADDRESS;
+#else
 	sockaddr_in sa;
+	memset(&sa,0,sizeof(sockaddr_in));
 	socklen_t len = sizeof(sa);
-	if (getsockname(s, (sockaddr*)&sa, &len)!=0)
-		return 0;
-	return ntohs(sa.sin_port);
+	if (getsockname__(s, (sockaddr*)&sa, &len)!=0)
+	{
+#if defined(_WIN32) && defined(_DEBUG) && !defined(WINDOWS_PHONE_8)
+		DWORD dwIOError = GetLastError();
+		LPVOID messageBuffer;
+		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
+			( LPTSTR ) & messageBuffer, 0, NULL );
+		// something has gone wrong here...
+		RAKNET_DEBUG_PRINTF( "getsockname failed:Error code - %d\n%s", dwIOError, messageBuffer );
+
+		//Free the buffer.
+		LocalFree( messageBuffer );
+#endif
+		*systemAddressOut = UNASSIGNED_SYSTEM_ADDRESS;
+		return;
+	}
+
+	systemAddressOut->SetPortNetworkOrder(sa.sin_port);
+	systemAddressOut->address.addr4.sin_addr.s_addr=sa.sin_addr.s_addr;
+#endif
+}
+/*
+void SocketLayer::GetSystemAddress_Old ( RakNetSocket *s, SystemAddress *systemAddressOut )
+{
+	return GetSystemAddress_Old(s->s, systemAddressOut);
+}
+*/
+void SocketLayer::GetSystemAddress ( __UDPSOCKET__ s, SystemAddress *systemAddressOut )
+{
+#if RAKNET_SUPPORT_IPV6!=1
+	GetSystemAddress_Old(s, systemAddressOut);
+#else
+	socklen_t slen;
+	sockaddr_storage ss;
+	slen = sizeof(ss);
+
+	if (getsockname__(s, (struct sockaddr *)&ss, &slen)!=0)
+	{
+#if defined(_WIN32) && defined(_DEBUG)
+		DWORD dwIOError = GetLastError();
+		LPVOID messageBuffer;
+		FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, dwIOError, MAKELANGID( LANG_NEUTRAL, SUBLANG_DEFAULT ),  // Default language
+			( LPTSTR ) & messageBuffer, 0, NULL );
+		// something has gone wrong here...
+		RAKNET_DEBUG_PRINTF( "getsockname failed:Error code - %d\n%s", dwIOError, messageBuffer );
+
+		//Free the buffer.
+		LocalFree( messageBuffer );
+#endif
+		systemAddressOut->FromString(0);
+		return;
+	}
+
+	if (ss.ss_family==AF_INET)
+	{
+		memcpy(&systemAddressOut->address.addr4,(sockaddr_in *)&ss,sizeof(sockaddr_in));
+		systemAddressOut->debugPort=ntohs(systemAddressOut->address.addr4.sin_port);
+
+		uint32_t zero = 0;		
+		if (memcmp(&systemAddressOut->address.addr4.sin_addr.s_addr, &zero, sizeof(zero))==0)
+			systemAddressOut->SetToLoopback(4);
+		//	systemAddressOut->address.addr4.sin_port=ntohs(systemAddressOut->address.addr4.sin_port);
+	}
+	else
+	{
+		memcpy(&systemAddressOut->address.addr6,(sockaddr_in6 *)&ss,sizeof(sockaddr_in6));
+		systemAddressOut->debugPort=ntohs(systemAddressOut->address.addr6.sin6_port);
+
+		char zero[16];
+		memset(zero,0,sizeof(zero));
+		if (memcmp(&systemAddressOut->address.addr4.sin_addr.s_addr, &zero, sizeof(zero))==0)
+			systemAddressOut->SetToLoopback(6);
+
+		//	systemAddressOut->address.addr6.sin6_port=ntohs(systemAddressOut->address.addr6.sin6_port);
+	}
+#endif // #if RAKNET_SUPPORT_IPV6!=1
+}
+/*
+void SocketLayer::GetSystemAddress ( RakNetSocket *s, SystemAddress *systemAddressOut )
+{
+	return GetSystemAddress(s->s, systemAddressOut);
+}
+*/
+
+// void SocketLayer::SetSocketLayerOverride(SocketLayerOverride *_slo)
+// {
+// 	slo=_slo;
+// }
+
+bool SocketLayer::GetFirstBindableIP(char firstBindable[128], int ipProto)
+{
+	SystemAddress ipList[ MAXIMUM_NUMBER_OF_INTERNAL_IDS ];
+	SocketLayer::GetMyIP( ipList );
+
+
+	if (ipProto==AF_UNSPEC)
+
+	{
+		ipList[0].ToString(false,firstBindable);
+		return true;
+	}		
+
+	// Find the first valid host address
+	unsigned int l;
+	for (l=0; l < MAXIMUM_NUMBER_OF_INTERNAL_IDS; l++)
+	{
+		if (ipList[l]==UNASSIGNED_SYSTEM_ADDRESS)
+			break;
+		if (ipList[l].GetIPVersion()==4 && ipProto==AF_INET)
+			break;
+		if (ipList[l].GetIPVersion()==6 && ipProto==AF_INET6)
+			break;
+	}
+
+	if (ipList[l]==UNASSIGNED_SYSTEM_ADDRESS || l==MAXIMUM_NUMBER_OF_INTERNAL_IDS)
+		return false;
+// 	RAKNET_DEBUG_PRINTF("%i %i %i %i\n",
+// 		((char*)(&ipList[l].address.addr4.sin_addr.s_addr))[0],
+// 		((char*)(&ipList[l].address.addr4.sin_addr.s_addr))[1],
+// 		((char*)(&ipList[l].address.addr4.sin_addr.s_addr))[2],
+// 		((char*)(&ipList[l].address.addr4.sin_addr.s_addr))[3]
+// 	);
+	ipList[l].ToString(false,firstBindable);
+	return true;
+
 }
 
 

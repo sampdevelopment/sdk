@@ -1,26 +1,27 @@
-/// \file
-/// \brief \b [Internal] Heap (Also serves as a priority queue)
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
+/// \file DS_Heap.h
+/// \internal
+/// \brief Heap (Also serves as a priority queue)
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
+
 
 #ifndef __RAKNET_HEAP_H
 #define __RAKNET_HEAP_H
 
+#include "RakMemoryOverride.h"
 #include "DS_List.h"
 #include "Export.h"
-#include <assert.h>
+#include "RakAssert.h"
 
 #ifdef _MSC_VER
 #pragma warning( push )
@@ -44,11 +45,15 @@ namespace DataStructures
 
 		Heap();
 		~Heap();
-		void Push(const weight_type &weight, const data_type &data);
+		void Push(const weight_type &weight, const data_type &data, const char *file, unsigned int line);
+		/// Call before calling PushSeries, for a new series of items
+		void StartSeries(void) {optimizeNextSeriesPush=false;}
+		/// If you are going to push a list of items, where the weights of the items on the list are in order and follow the heap order, PushSeries is faster than Push()
+		void PushSeries(const weight_type &weight, const data_type &data, const char *file, unsigned int line);
 		data_type Pop(const unsigned startingIndex);
 		data_type Peek(const unsigned startingIndex=0) const;
 		weight_type PeekWeight(const unsigned startingIndex=0) const;
-		void Clear(void);
+		void Clear(bool doNotDeallocateSmallBlocks, const char *file, unsigned int line);
 		data_type& operator[] ( const unsigned int position ) const;
 		unsigned Size(void) const;
 
@@ -58,25 +63,75 @@ namespace DataStructures
 		unsigned Parent(const unsigned i) const;
 		void Swap(const unsigned i, const unsigned j);
 		DataStructures::List<HeapNode> heap;
+		bool optimizeNextSeriesPush;
 	};
 
 	template  <class weight_type, class data_type, bool isMaxHeap>
 		Heap<weight_type, data_type, isMaxHeap>::Heap()
 	{
+		optimizeNextSeriesPush=false;
 	}
 
 	template  <class weight_type, class data_type, bool isMaxHeap>
 		Heap<weight_type, data_type, isMaxHeap>::~Heap()
 	{
-		Clear();
+		//Clear(true, _FILE_AND_LINE_);
 	}
 
 	template  <class weight_type, class data_type, bool isMaxHeap>
-	void Heap<weight_type, data_type, isMaxHeap>::Push(const weight_type &weight, const data_type &data)
+	void Heap<weight_type, data_type, isMaxHeap>::PushSeries(const weight_type &weight, const data_type &data, const char *file, unsigned int line)
+	{
+		if (optimizeNextSeriesPush==false)
+		{
+			// If the weight of what we are inserting is greater than / less than in order of the heap of every sibling and sibling of parent, then can optimize next push
+			unsigned currentIndex = heap.Size();
+			unsigned parentIndex;
+			if (currentIndex>0)
+			{
+				for (parentIndex = Parent(currentIndex); parentIndex < currentIndex; parentIndex++)
+				{
+#ifdef _MSC_VER
+#pragma warning(disable:4127)   // conditional expression is constant
+#endif
+					if (isMaxHeap)
+					{
+						// Every child is less than its parent
+						if (weight>heap[parentIndex].weight)
+						{
+							// Can't optimize
+							Push(weight,data,file,line);
+							return;
+						}
+					}
+					else
+					{
+						// Every child is greater than than its parent
+						if (weight<heap[parentIndex].weight)
+						{
+							// Can't optimize
+							Push(weight,data,file,line);
+							return;
+						}
+					}
+				}
+			}
+
+			// Parent's subsequent siblings and this row's siblings all are less than / greater than inserted element. Can insert all further elements straight to the end
+			heap.Insert(HeapNode(weight, data), file, line);
+			optimizeNextSeriesPush=true;
+		}
+		else
+		{
+			heap.Insert(HeapNode(weight, data), file, line);
+		}
+	}
+
+	template  <class weight_type, class data_type, bool isMaxHeap>
+	void Heap<weight_type, data_type, isMaxHeap>::Push(const weight_type &weight, const data_type &data, const char *file, unsigned int line)
 	{
 		unsigned currentIndex = heap.Size();
 		unsigned parentIndex;
-		heap.Insert(HeapNode(weight, data));
+		heap.Insert(HeapNode(weight, data), file, line);
 		while (currentIndex!=0)
 		{
 			parentIndex = Parent(currentIndex);
@@ -112,7 +167,7 @@ namespace DataStructures
 		// While we have children, swap out with the larger of the two children.
 
 		// This line will assert on an empty heap
-		data_type returnValue=heap[0].data;
+		data_type returnValue=heap[startingIndex].data;
 
 		// Move the last element to the head, and re-heapify
 		heap[startingIndex]=heap[heap.Size()-1];
@@ -121,7 +176,7 @@ namespace DataStructures
 		weight_type currentWeight;
 		currentIndex=startingIndex;
 		currentWeight=heap[startingIndex].weight;
-		heap.Del();
+		heap.RemoveFromEnd();
 
 #ifdef _MSC_VER
 #pragma warning( disable : 4127 ) // warning C4127: conditional expression is constant
@@ -184,25 +239,25 @@ namespace DataStructures
 	}
 
 	template  <class weight_type, class data_type, bool isMaxHeap>
-	data_type Heap<weight_type, data_type, isMaxHeap>::Peek(const unsigned startingIndex) const
+	inline data_type Heap<weight_type, data_type, isMaxHeap>::Peek(const unsigned startingIndex) const
 	{
 		return heap[startingIndex].data;
 	}
 
 	template  <class weight_type, class data_type, bool isMaxHeap>
-	weight_type Heap<weight_type, data_type, isMaxHeap>::PeekWeight(const unsigned startingIndex) const
+	inline weight_type Heap<weight_type, data_type, isMaxHeap>::PeekWeight(const unsigned startingIndex) const
 	{
 		return heap[startingIndex].weight;
 	}
 
 	template  <class weight_type, class data_type, bool isMaxHeap>
-		void Heap<weight_type, data_type, isMaxHeap>::Clear(void)
+		void Heap<weight_type, data_type, isMaxHeap>::Clear(bool doNotDeallocateSmallBlocks, const char *file, unsigned int line)
 	{
-		heap.Clear();
+		heap.Clear(doNotDeallocateSmallBlocks, file, line);
 	}
 
 	template <class weight_type, class data_type, bool isMaxHeap>
-	data_type& Heap<weight_type, data_type, isMaxHeap>::operator[] ( const unsigned int position ) const
+	inline data_type& Heap<weight_type, data_type, isMaxHeap>::operator[] ( const unsigned int position ) const
 	{
 		return heap[position].data;
 	}
@@ -213,22 +268,22 @@ namespace DataStructures
 	}
 
 	template <class weight_type, class data_type, bool isMaxHeap>
-	unsigned Heap<weight_type, data_type, isMaxHeap>::LeftChild(const unsigned i) const
+	inline unsigned Heap<weight_type, data_type, isMaxHeap>::LeftChild(const unsigned i) const
 	{
 		return i*2+1;
 	}
 
 	template <class weight_type, class data_type, bool isMaxHeap>
-	unsigned Heap<weight_type, data_type, isMaxHeap>::RightChild(const unsigned i) const
+	inline unsigned Heap<weight_type, data_type, isMaxHeap>::RightChild(const unsigned i) const
 	{
 		return i*2+2;
 	}
 
 	template <class weight_type, class data_type, bool isMaxHeap>
-	unsigned Heap<weight_type, data_type, isMaxHeap>::Parent(const unsigned i) const
+	inline unsigned Heap<weight_type, data_type, isMaxHeap>::Parent(const unsigned i) const
 	{
 #ifdef _DEBUG
-		assert(i!=0);
+		RakAssert(i!=0);
 #endif
 		return (i-1)/2;
 	}

@@ -1,5 +1,17 @@
-#include "_findfirst.h" // For linux
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 #include "FileOperations.h"
+#if _RAKNET_SUPPORT_FileOperations==1
+#include "RakMemoryOverride.h"
+#include "_FindFirst.h" // For linux
 #include <stdio.h>
 #include <string.h>
 #ifdef _WIN32 
@@ -9,64 +21,67 @@
 #else
 #include <sys/stat.h>
 #include <unistd.h>
-#include "LinuxStrings.h"
-#include "_findfirst.h"
+#include "_FindFirst.h"
+#endif
+#include "errno.h"
+
+#ifndef MAX_PATH
+#define MAX_PATH 260
 #endif
 
+#ifdef _MSC_VER
+#pragma warning( push )
+#endif
 
+#ifdef _MSC_VER
+#pragma warning( disable : 4996 ) // mkdir declared deprecated by Microsoft in order to make it harder to be cross platform.  I don't agree it's deprecated.
+#endif
 bool WriteFileWithDirectories( const char *path, char *data, unsigned dataLength )
 {
 	int index;
 	FILE *fp;
-	char *pathCopy;
-#ifndef _WIN32
-
-	char *systemCommand;
-#endif
+	char pathCopy[MAX_PATH];
+	int res;
 
 	if ( path == 0 || path[ 0 ] == 0 )
 		return false;
 
-#ifndef _WIN32
-
-	systemCommand = new char [ strlen( path ) + 1 + 6 ];
-
-#endif
-
-	pathCopy = new char [ strlen( path ) + 1 ];
-
 	strcpy( pathCopy, path );
 
-	index = 0;
-
-	while ( pathCopy[ index ] )
+	// Ignore first / if there is one
+	if (pathCopy[0])
 	{
-		if ( pathCopy[ index ] == '/' || pathCopy[ index ] == '\\')
+		index = 1;
+		while ( pathCopy[ index ] )
 		{
-			pathCopy[ index ] = 0;
-#ifdef _WIN32
-			_mkdir( pathCopy );
-#else
-
-			mkdir( pathCopy, 0744 );
-#endif
-
-			pathCopy[ index ] = '/';
+			if ( pathCopy[ index ] == '/' || pathCopy[ index ] == '\\')
+			{
+				pathCopy[ index ] = 0;
+	
+	#ifdef _WIN32
+				res = _mkdir( pathCopy );
+	#else
+	
+				res = mkdir( pathCopy, 0744 );
+	#endif
+				if (res<0 && errno!=EEXIST && errno!=EACCES)
+				{
+					return false;
+				}
+	
+				pathCopy[ index ] = '/';
+			}
+	
+			index++;
 		}
-
-		index++;
 	}
 
-	if (data && dataLength)
+	if (data)
 	{
 		fp = fopen( path, "wb" );
 
 		if ( fp == 0 )
 		{
-			delete [] pathCopy;
-#ifndef _WIN32
-			delete [] systemCommand;
-#endif
 			return false;
 		}
 
@@ -77,17 +92,17 @@ bool WriteFileWithDirectories( const char *path, char *data, unsigned dataLength
 	else
 	{
 #ifdef _WIN32
-		_mkdir( pathCopy );
+#pragma warning( disable : 4996 ) // mkdir declared deprecated by Microsoft in order to make it harder to be cross platform.  I don't agree it's deprecated.
+		res = _mkdir( pathCopy );
 #else
-		mkdir( pathCopy, 0744 );
+		res = mkdir( pathCopy, 0744 );
 #endif
+
+		if (res<0 && errno!=EEXIST)
+		{
+			return false;
+		}
 	}
-
-	delete [] pathCopy;
-#ifndef _WIN32
-	delete [] systemCommand;
-#endif
-
 
 	return true;
 }
@@ -145,3 +160,20 @@ void QuoteIfSpaces(char *str)
 		str[len+1]=0;
 	}
 }
+unsigned int GetFileLength(const char *path)
+{
+	FILE *fp = fopen(path, "rb");
+	if (fp==0) return 0;
+	fseek(fp, 0, SEEK_END);
+	unsigned int fileLength = ftell(fp);
+	fclose(fp);
+	return fileLength;
+
+}
+
+#ifdef _MSC_VER
+#pragma warning( pop )
+#endif
+
+#endif // _RAKNET_SUPPORT_FileOperations
+

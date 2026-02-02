@@ -1,42 +1,94 @@
+/*
+ *  Copyright (c) 2014, Oculus VR, Inc.
+ *  All rights reserved.
+ *
+ *  This source code is licensed under the BSD-style license found in the
+ *  LICENSE file in the root directory of this source tree. An additional grant 
+ *  of patent rights can be found in the PATENTS file in the same directory.
+ *
+ */
+
 /// \file
 ///
-/// This file is part of RakNet Copyright 2003 Kevin Jenkins.
-///
-/// Usage of RakNet is subject to the appropriate license agreement.
-/// Creative Commons Licensees are subject to the
-/// license found at
-/// http://creativecommons.org/licenses/by-nc/2.5/
-/// Single application licensees are subject to the license found at
-/// http://www.rakkarsoft.com/SingleApplicationLicense.html
-/// Custom license users are subject to the terms therein.
-/// GPL license users are subject to the GNU General Public
-/// License as published by the Free
-/// Software Foundation; either version 2 of the License, or (at your
-/// option) any later version.
+
+
 
 #include "SimpleMutex.h"
-#include <assert.h>
+#include "RakAssert.h"
 
-SimpleMutex::SimpleMutex()
+using namespace RakNet;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+SimpleMutex::SimpleMutex() //: isInitialized(false)
 {
-#ifdef _WIN32
-	//	hMutex = CreateMutex(NULL, FALSE, 0);
-	//	assert(hMutex);
-	InitializeCriticalSection(&criticalSection);
-#else
-	int error = pthread_mutex_init(&hMutex, 0);
-	assert(error==0);
-#endif
+
+
+
+
+
+
+
+	// Prior implementation of Initializing in Lock() was not threadsafe
+	Init();
 }
 
 SimpleMutex::~SimpleMutex()
 {
+// 	if (isInitialized==false)
+// 		return;
 #ifdef _WIN32
 	//	CloseHandle(hMutex);
 	DeleteCriticalSection(&criticalSection);
+
+
+
+
+
+
 #else
 	pthread_mutex_destroy(&hMutex);
 #endif
+
+
+
+
+
+
+
 }
 
 #ifdef _WIN32
@@ -47,6 +99,9 @@ SimpleMutex::~SimpleMutex()
 
 void SimpleMutex::Lock(void)
 {
+// 	if (isInitialized==false)
+// 		Init();
+
 #ifdef _WIN32
 	/*
 	DWORD d = WaitForSingleObject(hMutex, INFINITE);
@@ -54,45 +109,83 @@ void SimpleMutex::Lock(void)
 	if (d==WAIT_FAILED)
 	{
 	LPVOID messageBuffer;
-	FormatMessage( 
-	FORMAT_MESSAGE_ALLOCATE_BUFFER | 
-	FORMAT_MESSAGE_FROM_SYSTEM | 
+	FormatMessage(
+	FORMAT_MESSAGE_ALLOCATE_BUFFER |
+	FORMAT_MESSAGE_FROM_SYSTEM |
 	FORMAT_MESSAGE_IGNORE_INSERTS,
 	NULL,
 	GetLastError(),
 	MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
 	(LPTSTR) &messageBuffer,
 	0,
-	NULL 
+	NULL
 	);
 	// Process any inserts in messageBuffer.
 	// ...
 	// Display the string.
 	//MessageBox( NULL, (LPCTSTR)messageBuffer, "Error", MB_OK | MB_ICONINFORMATION );
-	printf("SimpleMutex error: %s", messageBuffer);
+	RAKNET_DEBUG_PRINTF("SimpleMutex error: %s", messageBuffer);
 	// Free the buffer.
 	LocalFree( messageBuffer );
 
 	}
 
-	assert(d==WAIT_OBJECT_0);
+	RakAssert(d==WAIT_OBJECT_0);
 	*/
 	EnterCriticalSection(&criticalSection);
 
+
+
+
+
+
 #else
 	int error = pthread_mutex_lock(&hMutex);
-	assert(error==0);
+	(void) error;
+	RakAssert(error==0);
 #endif
 }
 
 void SimpleMutex::Unlock(void)
 {
+// 	if (isInitialized==false)
+// 		return;
 #ifdef _WIN32
 	//	ReleaseMutex(hMutex);
 	LeaveCriticalSection(&criticalSection);
+
+
+
+
+
+
 #else
 	int error = pthread_mutex_unlock(&hMutex);
-	assert(error==0);
+	(void) error;
+	RakAssert(error==0);
 #endif
 }
 
+void SimpleMutex::Init(void)
+{
+#if defined(WINDOWS_PHONE_8) || defined(WINDOWS_STORE_RT)
+	InitializeCriticalSectionEx(&criticalSection,0,CRITICAL_SECTION_NO_DEBUG_INFO);
+#elif defined(_WIN32)
+	//	hMutex = CreateMutex(NULL, FALSE, 0);
+	//	RakAssert(hMutex);
+	InitializeCriticalSection(&criticalSection);
+
+
+
+
+
+
+
+
+#else
+	int error = pthread_mutex_init(&hMutex, 0);
+	(void) error;
+	RakAssert(error==0);
+#endif
+//	isInitialized=true;
+}
