@@ -97,6 +97,68 @@ BitStream::BitStream( const unsigned int initialBytesToAllocate )
 	copyData = true;
 }
 
+// SAMPSRV (adding this just as a tag for next RakNet upgrade)
+BitStream::BitStream(RPCParameters* pParams, bool _copyData)
+{
+	numberOfBitsUsed = numberOfBitsAllocated = pParams->numberOfBitsOfData;
+	readOffset = 0;
+	copyData = _copyData;
+
+	if (copyData)
+	{
+		BitSize_t lengthInBytes = BITS_TO_BYTES(pParams->numberOfBitsOfData);
+		if (lengthInBytes > 0)
+		{
+			if (lengthInBytes < BITSTREAM_STACK_ALLOCATION_SIZE)
+			{
+				data = (unsigned char*)stackData;
+				numberOfBitsAllocated = BITSTREAM_STACK_ALLOCATION_SIZE << 3;
+			}
+			else
+			{
+				data = (unsigned char*)malloc((size_t)lengthInBytes);
+			}
+			RakAssert(data);
+			memcpy(data, pParams->input, (size_t)lengthInBytes);
+		}
+		else
+			data = 0;
+	}
+	else
+		data = (unsigned char*)pParams->input;
+}
+
+BitStream::BitStream(Packet* pPacket, bool _copyData)
+{
+	numberOfBitsUsed = numberOfBitsAllocated = pPacket->bitSize;
+	readOffset = 0;
+	copyData = _copyData;
+
+	if (copyData)
+	{
+		BitSize_t lengthInBytes = BITS_TO_BYTES(pPacket->bitSize);
+		if (lengthInBytes > 0)
+		{
+			if (lengthInBytes < BITSTREAM_STACK_ALLOCATION_SIZE)
+			{
+				data = (unsigned char*)stackData;
+				numberOfBitsAllocated = BITSTREAM_STACK_ALLOCATION_SIZE << 3;
+			}
+			else
+			{
+				data = (unsigned char*)malloc((size_t)lengthInBytes);
+			}
+			RakAssert(data);
+			memcpy(data, pPacket->data, (size_t)lengthInBytes);
+		}
+		else
+			data = 0;
+	}
+	else
+		data = (unsigned char*)pPacket->data;
+}
+// SAMPSRV end
+
 BitStream::BitStream( unsigned char* _data, const unsigned int lengthInBytes, bool _copyData )
 {
 	numberOfBitsUsed = lengthInBytes << 3;
@@ -1180,3 +1242,4 @@ void BitStream::WriteFloat16( float inOutFloat, float floatMin, float floatMax )
 #endif
 
 #endif // #if _MSC_VER < 1299 
+
