@@ -54,11 +54,6 @@ namespace RakNet
 		/// Default Constructor
 		BitStream();
 
-        // SAMPSRV (adding this just as a tag for next RakNet upgrade)
-		BitStream(RPCParameters* pParams, bool _copyData = false);
-		BitStream(Packet* pPacket, bool _copyData = false);
-		// SAMPSRV end
-
 		/// \brief Create the bitstream, with some number of bytes to immediately allocate.
 		/// \details There is no benefit to calling this, unless you know exactly how many bytes you need and it is greater than BITSTREAM_STACK_ALLOCATION_SIZE.
 		/// In that case all it does is save you one or more realloc calls.
@@ -77,7 +72,12 @@ namespace RakNet
 		/// \param[in] _copyData true or false to make a copy of \a _data or not.
 		BitStream( unsigned char* _data, const unsigned int lengthInBytes, bool _copyData );
 
-		// Destructor
+        // SAMPSRV (adding this just as a tag for next RakNet upgrade)
+		BitStream(RPCParameters* pParams, bool _copyData = false);
+		BitStream(Packet* pPacket, bool _copyData = false);
+		// SAMPSRV end
+		
+        // Destructor
 		~BitStream();
 
 		/// Resets the bitstream for reuse.
@@ -2051,4 +2051,5 @@ namespace RakNet
 #endif
 
 #endif // VC6
+
 
