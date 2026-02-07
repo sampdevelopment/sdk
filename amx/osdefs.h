@@ -10,7 +10,11 @@
 #ifndef _OSDEFS_H
 #define _OSDEFS_H
 
-/* Map compiler-specific macros to Borland C++ style macros */
+/* Every compiler uses different "default" macros to indicate the mode
+ * it is in. Throughout the source, we use the Borland C++ macros, so
+ * the macros of Watcom C/C++ and Microsoft Visual C/C++ are mapped to
+ * those of Borland C++.
+ */
 #if defined(__WATCOMC__)
 #  if defined(__WINDOWS__) || defined(__NT__)
 #    define _Windows    1
@@ -31,14 +35,13 @@
 #  endif
 #endif
 
-/* Include endian headers if available */
 #if defined __FreeBSD__
    #include <sys/endian.h>
 #elif defined LINUX
    #include <endian.h>
 #endif
 
-/* Linux endian definitions if not present */
+/* Linux NOW has these */
 #if !defined BIG_ENDIAN
   #define BIG_ENDIAN    4321
 #endif
@@ -55,7 +58,6 @@
   #endif
 #endif
 
-/* Directory separator character */
 #if defined __MSDOS__ || defined __WIN32__ || defined _Windows
   #define DIRSEP_CHAR '\\'
 #elif defined macintosh
@@ -64,33 +66,36 @@
   #define DIRSEP_CHAR '/'   /* directory separator character */
 #endif
 
-/* -------------------
-   MAX_PATH / AMX_MAX_PATH
-   ------------------- */
+/* _MAX_PATH is sometimes called differently and it may be in limits.h instead
+ * stdio.h.
+ */
+//#if !defined _MAX_PATH
+//  /* not defined, perhaps stdio.h was not included */
+//  #include <stdio.h>
+//  #if !defined _MAX_PATH
+//    /* still undefined, try a common alternative name */
+//    #if defined MAX_PATH
+//      #define _MAX_PATH    MAX_PATH
+//    #else
+//      /* no _MAX_PATH and no MAX_PATH, perhaps it is in limits.h */
+//      #include <limits.h>
+//      #if defined PATH_MAX
+//        #define _MAX_PATH  PATH_MAX
+//      #elif defined _POSIX_PATH_MAX
+//        #define _MAX_PATH  _POSIX_PATH_MAX
+//      #else
+//        /* everything failed, actually we have a problem here... */
+//        #define _MAX_PATH  1024
+//      #endif
+//    #endif
+//  #endif
+//#endif
 
-#if !defined(_MAX_PATH)
-
-    /* Windows */
-    #if defined(_WIN32) || defined(__WIN32__) || defined(_Windows)
-        #include <stdlib.h>
-        #ifndef _MAX_PATH
-            #define _MAX_PATH 260
-        #endif
-
-    /* Linux / Unix */
-    #else
-        #include <limits.h>
-        #if defined(PATH_MAX)
-            #define _MAX_PATH PATH_MAX
-        #elif defined(_POSIX_PATH_MAX)
-            #define _MAX_PATH _POSIX_PATH_MAX
-        #else
-            #define _MAX_PATH 1024
-        #endif
-    #endif
-
+#ifndef _MAX_PATH
+    #include <stdlib.h>
+    #define AMX_MAX_PATH _MAX_PATH
+#else
+    #define AMX_MAX_PATH _MAX_PATH
 #endif
-
-#define AMX_MAX_PATH _MAX_PATH
 
 #endif  /* _OSDEFS_H */
